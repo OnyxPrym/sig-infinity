@@ -25,6 +25,7 @@ except ImportError:
 import pandas as pd
 import analysis as an
 import quotex_collector as qc
+import turso_db
 
 ADMIN_PASSCODE = os.environ.get("ADMIN_PASSCODE", "karanka100")
 DAILY_FREE_LIMIT = 40
@@ -48,12 +49,13 @@ def _cors_headers(response):
         response.headers["Vary"] = "Origin"
     return response
 
-DB_PATH = str(Path(__file__).parent / "sig_infinity.db")
+DB_PATH = str(Path(__file__).parent / "sig_infinity.db")
+turso_db.set_local_fallback_path(DB_PATH)
 
 def _checkpoint_and_close():
     """Force WAL checkpoint so sig_infinity.db is complete on shutdown."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = turso_db.connect()
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.close()
         print("[shutdown] WAL checkpoint done")
@@ -78,7 +80,7 @@ STATE = {"signals_delivered": 0, "last_signal_by_symbol": {}}
 #  DB setup
 # ---------------------------------------------------------------------------
 def init_user_signals_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS user_signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,11 +96,12 @@ def init_user_signals_db():
         )
     """)
     conn.commit()
+    turso_db.sync(conn)
     conn.close()
 
 
 def init_auth_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,11 +121,12 @@ def init_auth_db():
         )
     """)
     conn.commit()
+    turso_db.sync(conn)
     conn.close()
 
 
 def init_quota_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS quota (
             ip TEXT NOT NULL,
@@ -138,6 +142,7 @@ def init_quota_db():
         )
     """)
     conn.commit()
+    turso_db.sync(conn)
     conn.close()
 
 
@@ -149,30 +154,32 @@ def get_client_ip():
 
 
 def is_admin(ip):
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     row = conn.execute("SELECT 1 FROM admins WHERE ip = ?", (ip,)).fetchone()
     conn.close()
     return row is not None
 
 
 def set_admin(ip):
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     conn.execute("INSERT OR REPLACE INTO admins (ip, unlocked_at) VALUES (?, ?)",
                  (ip, datetime.now(timezone.utc).isoformat()))
     conn.commit()
+    turso_db.sync(conn)
     conn.close()
 
 
 def clear_admin(ip):
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     conn.execute("DELETE FROM admins WHERE ip = ?", (ip,))
     conn.commit()
+    turso_db.sync(conn)
     conn.close()
 
 
 def quota_status(ip):
     today = date.today().isoformat()
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     row = conn.execute("SELECT used FROM quota WHERE ip = ? AND day = ?",
                        (ip, today)).fetchone()
     conn.close()
@@ -182,18 +189,19 @@ def quota_status(ip):
 
 def consume_quota(ip):
     today = date.today().isoformat()
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     conn.execute("""
         INSERT INTO quota (ip, day, used) VALUES (?, ?, 1)
         ON CONFLICT(ip, day) DO UPDATE SET used = used + 1
     """, (ip, today))
     conn.commit()
+    turso_db.sync(conn)
     conn.close()
     return quota_status(ip)
 
 
 def load_candles(symbol, limit=300):
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     df = pd.read_sql_query(
         "SELECT * FROM candles WHERE source = 'quotex' AND symbol = ? "
         "ORDER BY timestamp DESC LIMIT ?",
@@ -208,7 +216,7 @@ def load_candles(symbol, limit=300):
 
 
 def candle_count(symbol):
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     n = conn.execute(
         "SELECT COUNT(*) FROM candles WHERE source='quotex' AND symbol=?",
         (symbol,),
@@ -270,9 +278,10 @@ def admin_unlock():
         # Also set user-based admin if the request is authenticated
         user = get_current_user()
         if user:
-            conn = sqlite3.connect(DB_PATH)
+            conn = turso_db.connect()
             conn.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user["user_id"],))
             conn.commit()
+            turso_db.sync(conn)
             conn.close()
             return jsonify({"ok": True, "message": "Admin unlocked for user", "user_admin": True})
 
@@ -491,7 +500,7 @@ def get_current_user():
         token = request.args.get("token", "").strip()
     if not token:
         return None
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     row = conn.execute(
         "SELECT s.user_id, u.email, u.is_admin FROM sessions s "
         "JOIN users u ON u.id = s.user_id "
@@ -507,19 +516,20 @@ def get_current_user():
 def create_session(user_id):
     token = secrets.token_urlsafe(32)
     expires_at = time.time() + SESSION_DURATION_SECONDS
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     conn.execute(
         "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)",
         (token, user_id, expires_at)
     )
     conn.commit()
+    turso_db.sync(conn)
     conn.close()
     return token
 
 
 def get_quota_for_user(user_id):
     today = date.today().isoformat()
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     row = conn.execute(
         "SELECT used FROM quota WHERE ip = ? AND day = ?",
         (f"user_{user_id}", today)
@@ -531,12 +541,13 @@ def get_quota_for_user(user_id):
 
 def consume_user_quota(user_id):
     today = date.today().isoformat()
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     conn.execute("""
         INSERT INTO quota (ip, day, used) VALUES (?, ?, 1)
         ON CONFLICT(ip, day) DO UPDATE SET used = used + 1
     """, (f"user_{user_id}", today))
     conn.commit()
+    turso_db.sync(conn)
     conn.close()
     return get_quota_for_user(user_id)
 
@@ -552,7 +563,7 @@ def auth_register():
     if len(password) < 6:
         return jsonify({"ok": False, "message": "Password must be at least 6 characters."}), 400
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
     if existing:
         conn.close()
@@ -563,6 +574,7 @@ def auth_register():
     cur.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", (email, pw_hash))
     user_id = cur.lastrowid
     conn.commit()
+    turso_db.sync(conn)
     conn.close()
 
     token = create_session(user_id)
@@ -575,7 +587,7 @@ def auth_login():
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     row = conn.execute(
         "SELECT id, password_hash FROM users WHERE email = ?", (email,)
     ).fetchone()
@@ -592,9 +604,10 @@ def auth_login():
 def auth_logout():
     user = get_current_user()
     if user:
-        conn = sqlite3.connect(DB_PATH)
+        conn = turso_db.connect()
         conn.execute("DELETE FROM sessions WHERE token = ?", (user["token"],))
         conn.commit()
+        turso_db.sync(conn)
         conn.close()
     return jsonify({"ok": True, "message": "Logged out."})
 
@@ -619,18 +632,19 @@ def auth_me():
 #  USER SIGNAL HISTORY + RESULT TRACKER
 # ---------------------------------------------------------------------------
 def save_user_signal(user_id, symbol, direction, entry_price, entry_time_iso, expiry_time_iso):
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     conn.execute("""
         INSERT INTO user_signals
         (user_id, symbol, direction, entry_price, entry_time, expiry_time)
         VALUES (?, ?, ?, ?, ?, ?)
     """, (user_id, symbol, direction, float(entry_price), entry_time_iso, expiry_time_iso))
     conn.commit()
+    turso_db.sync(conn)
     conn.close()
 
 
 def get_user_signals(user_id, limit=50):
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     rows = conn.execute("""
         SELECT id, symbol, direction, entry_price, entry_time, expiry_time, result, resolved
         FROM user_signals WHERE user_id = ?
@@ -650,7 +664,7 @@ def _candle_close_at(symbol, target_iso):
         target_dt = pd.to_datetime(target_iso)
     except Exception:
         return None
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     row = conn.execute("""
         SELECT close FROM candles
         WHERE source = 'quotex' AND symbol = ?
@@ -664,7 +678,7 @@ def _candle_close_at(symbol, target_iso):
 def resolve_pending_user_signals():
     """Check every unresolved signal whose expiry has passed + 15s, mark WON/LOST."""
     now = time.time()
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     pending = conn.execute("""
         SELECT id, symbol, direction, entry_price, expiry_time
         FROM user_signals WHERE resolved = 0
@@ -691,9 +705,10 @@ def resolve_pending_user_signals():
         else:
             result = "WON" if exit_price < entry_price else "LOST"
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = turso_db.connect()
         conn.execute("UPDATE user_signals SET result = ?, resolved = 1 WHERE id = ?", (result, sid))
         conn.commit()
+        turso_db.sync(conn)
         conn.close()
         print(f"[results] signal {sid} {symbol} {direction}: {result} (entry={entry_price}, exit={exit_price})")
 
@@ -707,7 +722,7 @@ def result_tracker_loop():
             resolve_pending_user_signals()
             counter += 1
             if counter % 60 == 0:
-                conn = sqlite3.connect(DB_PATH)
+                conn = turso_db.connect()
                 conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
                 conn.close()
         except Exception as e:

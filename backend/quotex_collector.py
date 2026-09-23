@@ -1,5 +1,5 @@
 """
-quotex_collector.py â€” WebSocket streaming edition.
+quotex_collector.py Ã¢â‚¬â€ WebSocket streaming edition.
 
 Replaces the 3-second polling loop (get_candles, ~2-3 min behind) with the
 real-time WebSocket stream (start_realtime_candle, sub-second updates).
@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from pyquotex.stable_api import Quotex
 import analysis as _an
+import turso_db
 import pandas as pd
 
 OTC_MARKETS = {
@@ -29,11 +30,12 @@ STREAM_TICK_SLEEP = 0.3  # FASTTICK_V5  # FASTTICK_V5 - 300ms loop  # FASTTICK_V
 FETCH_WORKERS = 1
 SESSION_FILE = Path(__file__).parent / "session.json"
 DB_PATH = str(Path(__file__).parent / "sig_infinity.db")
+turso_db.set_local_fallback_path(DB_PATH)
 
-# _FLIP_LOCK_V1 â€” prevents double-fire of the same flip when two coroutines race
+# _FLIP_LOCK_V1 Ã¢â‚¬â€ prevents double-fire of the same flip when two coroutines race
 _FLIP_LOCK = threading.Lock()
 
-# OPTIMIZATION: per-symbol SuperTrend cache â€” avoids recomputing on every tick
+# OPTIMIZATION: per-symbol SuperTrend cache Ã¢â‚¬â€ avoids recomputing on every tick
 _TREND_CACHE = {}
 
 STATE = {
@@ -46,7 +48,7 @@ STATE = {
     "flips": {},
 }
 
-# ─── AUTO_REFRESH_V1: reconnect signal from auto_refresh.py ───
+# â”€â”€â”€ AUTO_REFRESH_V1: reconnect signal from auto_refresh.py â”€â”€â”€
 _RECONNECT_EVENT = threading.Event()
 
 
@@ -54,7 +56,7 @@ def force_reconnect():
     """Called by auto_refresh.py after writing a fresh session.json.
     Signals the current _run_all() to exit cleanly so the outer retry loop
     reloads session.json and reconnects with the new SSID."""
-    print("[collector] force_reconnect() called — signalling loop to exit")
+    print("[collector] force_reconnect() called â€” signalling loop to exit")
     STATE["refresh_pending"] = True
     _RECONNECT_EVENT.set()
 
@@ -64,7 +66,7 @@ def _reconnect_requested() -> bool:
         _RECONNECT_EVENT.clear()
         return True
     return False
-# ───────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _normalize_candle(c):
@@ -84,14 +86,14 @@ def _normalize_candle(c):
     }
 
 
-# â”€â”€â”€â”€â”€â”€â”€ OPTIMIZATION: persistent DB connection â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ OPTIMIZATION: persistent DB connection Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 _DB_CONN = None
 _DB_LOCK = threading.Lock()
 
 def _get_db():
     global _DB_CONN
     if _DB_CONN is None:
-        _DB_CONN = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        _DB_CONN = turso_db.connect()
         # WAL mode: concurrent reads/writes, much faster commits
         _DB_CONN.execute("PRAGMA journal_mode=WAL")
         _DB_CONN.execute("PRAGMA synchronous=NORMAL")
@@ -116,10 +118,11 @@ def save_candles_batch(symbol, candles):
             except Exception as e:
                 print("[quotex] save error %s: %s" % (symbol, e))
         conn.commit()
+        turso_db.sync(conn)
         return inserted
 
 
-# â”€â”€â”€ FASTER_REACTION_V1 â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ FASTER_REACTION_V1 Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 # Per-symbol trend cache: the full trend/band arrays are computed once, then
 # only the LAST bar is recomputed on every tick. The full array is refreshed
 # only when a new candle starts (minute rollover).
@@ -211,7 +214,7 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
 
             # Did the candle roll over to a new minute?
             if ts_dt != ts_list[-1]:
-                # New candle â€” append a new bar and recompute it
+                # New candle Ã¢â‚¬â€ append a new bar and recompute it
                 close.append(price)
                 high.append(high_p)
                 low.append(low_p)
@@ -223,7 +226,7 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
                 trend.append(trend[-1])
                 cached["n"] = len(close)
             else:
-                # Same candle â€” update the last bar
+                # Same candle Ã¢â‚¬â€ update the last bar
                 close[-1] = price
                 high[-1] = high_p
                 low[-1] = low_p
@@ -280,7 +283,7 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
         try:
             df = _pd.read_sql_query(
                 "SELECT timestamp, open, high, low, close FROM candles WHERE source='quotex' AND symbol=? ORDER BY timestamp ASC",
-                sqlite3.connect(DB_PATH), params=(app_symbol,),
+                turso_db.connect(), params=(app_symbol,),
             )
         except Exception as e:
             STATE["flips"][app_symbol] = {"error": str(e)}
@@ -410,7 +413,7 @@ async def _fetch_history(client, app_symbol, quotex_asset):
 
 
 async def _stream_loop(client, app_symbol, quotex_asset):
-    """FASTTICK_V4 â€” real-time tick aggregator with keep-alive writes."""
+    """FASTTICK_V4 Ã¢â‚¬â€ real-time tick aggregator with keep-alive writes."""
     import time as _time
 
     sub_ok = False
@@ -537,8 +540,8 @@ async def _run_all():
     print("[quotex] Starting WebSocket stream (real-time)...")
     await asyncio.gather(*[_stream_loop(client, s, a) for s, a in OTC_MARKETS.items()])
 
-    # AUTO_REFRESH_V1: gather returned — either stop_collector() or force_reconnect()
-    print("[quotex] Stream loop exited — closing client")
+    # AUTO_REFRESH_V1: gather returned â€” either stop_collector() or force_reconnect()
+    print("[quotex] Stream loop exited â€” closing client")
     try:
         await client.close()
     except Exception as e:
@@ -584,7 +587,7 @@ def stop_collector():
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = turso_db.connect()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS candles (
             source TEXT NOT NULL,
@@ -595,4 +598,5 @@ def init_db():
         )
     """)
     conn.commit()
+    turso_db.sync(conn)
     conn.close()

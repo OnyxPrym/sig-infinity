@@ -37,3 +37,19 @@ cloudflared.exe
 .idea/
 *.swp
 .DS_Store
+
+# Python virtualenv (created during Turso setup)
+backend/.venv/
+
+# Migration artifacts
+backend/migrate_to_turso.py
+backend/migrate_http.py
+backend/sig_infinity_dump.sql
+backend/sig_infinity_dump_clean.sql
+backend/sig_infinity_import.sql
+backend/*:memory:*
+
+# WAL/SHM
+*.db-shm
+*.db-wal
+backend/:memory:*

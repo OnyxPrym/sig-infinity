@@ -11,9 +11,13 @@
       - key: PORT
         value: 10000
       - key: DB_PATH
-        value: /data/sig_infinity.db
+        value: /tmp/sig_infinity.db
       - key: REFRESH_INTERVAL_SECONDS
         value: 7200
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
       - key: ADMIN_PASSCODE
         sync: false
       - key: FLASK_SECRET_KEY
