@@ -382,15 +382,34 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
 
 
 def load_session():
-    if not SESSION_FILE.exists():
-        raise RuntimeError("Session file not found: %s" % SESSION_FILE)
-    with open(SESSION_FILE, "r") as f:
-        data = json.load(f)
-    token = data.get("token")
-    user_agent = data.get("user_agent")
-    if not token or not user_agent:
-        raise RuntimeError("session.json must contain token and user_agent")
-    return token, user_agent
+    """Load Quotex session. Turso first, then fall back to local file."""
+    # 1. Try Turso (survives container restarts)
+    try:
+        import turso_db
+        conn = turso_db.connect()
+        cur = conn.execute("SELECT ssid, user_agent FROM bot_session WHERE id = 1")
+        row = cur.fetchone()
+        conn.close()
+        if row and row[0] and row[1]:
+            print("[quotex] Session loaded from TURSO (ssid=%s...)" % row[0][:16])
+            return row[0], row[1]
+    except Exception as e:
+        print("[quotex] Turso session load failed (fallback to file): %s" % e)
+
+    # 2. Fall back to local session.json
+    if SESSION_FILE.exists():
+        try:
+            with open(SESSION_FILE, "r") as f:
+                data = json.load(f)
+            token = data.get("token")
+            user_agent = data.get("user_agent")
+            if token and user_agent:
+                print("[quotex] Session loaded from session.json (ssid=%s...)" % token[:16])
+                return token, user_agent
+        except Exception as e:
+            print("[quotex] session.json read failed: %s" % e)
+
+    raise RuntimeError("No session available (Turso empty + session.json missing)")
 
 
 async def _fetch_history(client, app_symbol, quotex_asset):
