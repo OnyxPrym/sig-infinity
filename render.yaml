@@ -1,0 +1,26 @@
+﻿services:
+  - type: web
+    name: sig-infinity-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: frankfurt
+    healthCheckPath: /api/status
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: DB_PATH
+        value: /data/sig_infinity.db
+      - key: REFRESH_INTERVAL_SECONDS
+        value: 7200
+      - key: ADMIN_PASSCODE
+        sync: false
+      - key: FLASK_SECRET_KEY
+        sync: false
+      - key: TWELVE_DATA_API_KEY
+        sync: false
+      - key: QUOTEX_EMAIL
+        sync: false
+      - key: QUOTEX_PASSWORD
+        sync: false

@@ -1,0 +1,13 @@
+﻿.env
+*.env
+!.env.example
+session.json
+sessions/
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+*.pyc
+*.pre_patch
+*.bak*
+*_backups/

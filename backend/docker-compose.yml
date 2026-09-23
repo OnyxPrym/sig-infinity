@@ -1,0 +1,32 @@
+﻿services:
+  sig-api:
+    build: .
+    image: sig-infinity-ai:latest
+    container_name: sig-api
+    restart: always
+    env_file: .env
+    environment:
+      PORT: "10000"
+      DB_PATH: /data/sig_infinity.db
+    volumes:
+      - sig_data:/data
+      - ./session.json:/app/session.json:ro
+    ports:
+      - "127.0.0.1:10000:10000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: sig-tunnel
+    restart: always
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - sig-api
+
+volumes:
+  sig_data:
+    driver: local

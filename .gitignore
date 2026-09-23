@@ -1,0 +1,39 @@
+﻿# Secrets
+.env
+*.env
+!.env.example
+session.json
+sessions/session.json
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.db.bak
+*.db.bak_*
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Backups / patches
+*.bak
+*.bak*
+*.pre_patch
+*.pre_*
+*.before_*
+*.corrupted
+*.old_version_*
+*.broken_*
+
+# Windows binary
+cloudflared.exe
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sig Infinity AI — Master Control</title>
+<style>
+  :root {
+    --bg: #060a18;
+    --panel: #0d1530;
+    --border: #1e2b55;
+    --accent: #4da3ff;
+    --gold: #e8b64a;
+    --green: #35d17a;
+    --red: #ff5566;
+    --text: #d8e3ff;
+    --muted: #7788b8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(ellipse at top, #0c1638 0%, #05070f 70%);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    padding: 32px;
+  }
+  h1 {
+    font-size: 22px;
+    letter-spacing: 0.5px;
+    margin: 0 0 4px;
+    color: #fff;
+  }
+  .sub { color: var(--muted); margin-bottom: 28px; font-size: 13px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    max-width: 1100px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--accent);
+    margin: 0 0 14px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+  }
+  .row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 14px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.off { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .sig { font-weight: 600; }
+  .sig.BUY { color: var(--green); }
+  .sig.SELL { color: var(--red); }
+  .sig.WAIT { color: var(--muted); }
+  .controls { display: flex; gap: 10px; margin-top: 14px; }
+  button {
+    background: linear-gradient(180deg, #1c2a55, #101a38);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button:hover { border-color: var(--accent); color: #fff; }
+  .logs {
+    max-height: 220px;
+    overflow-y: auto;
+    font-family: "Consolas", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .logs .ERROR { color: var(--red); }
+  .logs .INFO { color: var(--muted); }
+</style>
+</head>
+<body>
+  <h1>SIG-INFINITY AI — MASTER CONTROL</h1>
+  <div class="sub">Data collector · analysis engine · signal API · Netlify connection</div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Data Source</h2>
+      <div class="row"><span><span class="dot" id="dsDot"></span>Status</span><span id="dsStatus">—</span></div>
+      <div class="row" id="marketRow" style="display:none;">
+        <span><span class="dot off"></span>Market</span><span style="color:var(--gold);">WEEKEND — MARKETS UNAVAILABLE</span>
+      </div>
+      <div class="row"><span>Last poll</span><span id="lastPoll">—</span></div>
+      <div id="candleCounts"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Analysis Engine</h2>
+      <div class="row"><span><span class="dot on"></span>Status</span><span>On-demand (waits for user request)</span></div>
+      <div class="row"><span>Timeframes</span><span>1M trigger → 5M confluence</span></div>
+      <div class="row"><span>Confluence threshold</span><span>7 / 9 factors</span></div>
+    </div>
+
+    <div class="panel">
+      <h2>Signal Engine — Latest Bias</h2>
+      <div id="signalRows"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Signal API</h2>
+      <div class="row"><span><span class="dot on"></span>Status</span><span>Connected</span></div>
+      <div class="row"><span>Signals delivered</span><span id="delivered">0</span></div>
+    </div>
+
+    <div class="panel" style="grid-column: 1 / -1;">
+      <h2>Controls</h2>
+      <div class="controls">
+        <button onclick="ctrl('start')">START</button>
+        <button onclick="ctrl('stop')">STOP</button>
+        <button onclick="ctrl('test')">TEST FETCH</button>
+        <button onclick="refresh()">REFRESH</button>
+      </div>
+    </div>
+
+    <div class="panel" style="grid-column: 1 / -1;">
+      <h2>System Logs</h2>
+      <div class="logs" id="logBox"></div>
+    </div>
+  </div>
+
+<script>
+async function refresh() {
+  const s = await (await fetch('/api/status')).json();
+  document.getElementById('dsDot').className = 'dot ' + (s.collector_running ? 'on' : 'off');
+  document.getElementById('dsStatus').textContent = s.collector_running ? 'Connected — polling' : 'Stopped';
+  document.getElementById('marketRow').style.display = s.market_open ? 'none' : 'flex';
+  document.getElementById('lastPoll').textContent = s.last_poll ? new Date(s.last_poll * 1000).toLocaleTimeString() : '—';
+  document.getElementById('delivered').textContent = s.signals_delivered;
+
+  let counts = '';
+  for (const sym of s.symbols) {
+    counts += `<div class="row"><span>${sym} candles</span><span>${s.candle_counts[sym] || 0}</span></div>`;
+  }
+  document.getElementById('candleCounts').innerHTML = counts;
+
+  let sigRows = '';
+  for (const sym of s.symbols) {
+    const bias = s.last_signal_by_symbol[sym] || 'WAIT';
+    sigRows += `<div class="row"><span>${sym}</span><span class="sig ${bias}">${bias}</span></div>`;
+  }
+  document.getElementById('signalRows').innerHTML = sigRows;
+
+  const logs = await (await fetch('/api/logs')).json();
+  document.getElementById('logBox').innerHTML = logs.map(
+    l => `<div class="${l.level}">[${new Date(l.ts).toLocaleTimeString()}] ${l.level} — ${l.message}</div>`
+  ).join('');
+}
+
+async function ctrl(action) {
+  await fetch(`/api/control/${action}`, { method: 'POST' });
+  setTimeout(refresh, 500);
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
