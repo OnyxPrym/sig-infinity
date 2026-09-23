@@ -510,16 +510,44 @@ def set_session_endpoint():
     if not data.get("token"):
         return jsonify({"ok": False, "message": "missing token"}), 400
 
+    ssid = data["token"]
+    cookies = data.get("cookies", "")
+    user_agent = data.get("user_agent", "")
+
+    # 1. Write to session.json (immediate use by collector)
     session_path = Path(__file__).parent / "session.json"
     session_path.write_text(json.dumps(data, indent=4))
 
+    # 2. Persist to Turso (survives container restarts)
+    try:
+        import turso_db
+        conn = turso_db.connect()
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS bot_session ("
+            "id INTEGER PRIMARY KEY CHECK (id = 1), "
+            "ssid TEXT NOT NULL, "
+            "cookies TEXT, "
+            "user_agent TEXT, "
+            "updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO bot_session (id, ssid, cookies, user_agent) VALUES (1, ?, ?, ?)",
+            (ssid, cookies, user_agent),
+        )
+        conn.commit()
+        conn.close()
+        print(f"[set-session] Persisted to Turso (ssid={ssid[:16]}...)")
+    except Exception as e:
+        print(f"[set-session] Turso write failed: {e}")
+
+    # 3. Force collector to reload
     try:
         qc.force_reconnect()
-        print(f"[set-session] Collector reconnect signalled (new ssid={data['token'][:16]}...)")
+        print(f"[set-session] Collector reconnect signalled")
     except Exception as e:
-        print(f"[set-session] Reconnect signal failed: {e}")
+        print(f"[set-session] Reconnect failed: {e}")
 
-    return jsonify({"ok": True, "message": "Session updated, collector reconnecting"})
+    return jsonify({"ok": True, "message": "Session updated + persisted to Turso"})
 
 
 def get_current_user():
