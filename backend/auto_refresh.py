@@ -1,10 +1,11 @@
 """
-Auto-refresh Quotex session.
+Auto-refresh Quotex session with strict guard.
 
-Priority:
-1. If QUOTEX_SESSION_JSON env var is set, use it directly (no HTTP login).
-2. Every REFRESH_INTERVAL_SECONDS, try to refresh via HTTP login.
-3. If refresh fails, keep using the existing session.json.
+- If no session exists (no env var, no session.json), do NOTHING.
+  No HTTP login attempts. Render stays quiet.
+- If a session exists (either from env var or pushed via /api/admin/set-session),
+  try refreshing every 2 hours.
+- On HTTP failure, keep the existing session and back off to 4 hours.
 """
 from __future__ import annotations
 
@@ -23,7 +24,8 @@ IMPERSONATE = "firefox135"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) Gecko/20100101 Firefox/127.0"
 
 REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL_SECONDS", 2 * 60 * 60))
-RETRY_INTERVAL = 5 * 60
+BACKOFF_AFTER_FAIL = 4 * 60 * 60
+WATCH_INTERVAL = 60
 
 EMAIL = os.environ.get("QUOTEX_EMAIL", "moetaesibiz@gmail.com")
 PASSWORD = os.environ.get("QUOTEX_PASSWORD", "")
@@ -37,7 +39,6 @@ def _cookies_to_header(jar):
 
 
 def load_env_session():
-    """If QUOTEX_SESSION_JSON is set, write it to session.json on boot."""
     if not SESSION_JSON_ENV:
         return False
     try:
@@ -112,7 +113,7 @@ def write_session(session):
     print(f"[auto_refresh] Wrote {SESSION_PATH}")
 
 
-def apply_to_collector(session):
+def apply_to_collector():
     try:
         import quotex_collector as qc
         fn = getattr(qc, "force_reconnect", None)
@@ -123,39 +124,45 @@ def apply_to_collector(session):
         print(f"[auto_refresh] Could not poke collector: {e}")
 
 
-def refresh_loop():
-    # On boot: try env first, then HTTP
-    have_session = load_env_session()
+def wait_for_first_session():
+    """Block until session.json exists. No Quotex hits until it does."""
+    loaded_env = load_env_session()
+    if loaded_env or SESSION_PATH.exists():
+        return True
 
-    if not have_session:
-        print("[auto_refresh] No env session — trying HTTP login on boot")
-        session = fetch_fresh_session()
-        if session:
-            write_session(session)
-            have_session = True
-
-    if not have_session and not SESSION_PATH.exists():
-        print("[auto_refresh] No session available. Retrying every 5 min...")
-        while True:
-            time.sleep(RETRY_INTERVAL)
-            session = fetch_fresh_session()
-            if session:
-                write_session(session)
-                apply_to_collector(session)
-                break
-
-    print(f"[auto_refresh] Session ready. Next refresh in {REFRESH_INTERVAL // 60} min")
-    time.sleep(REFRESH_INTERVAL)
+    print("[auto_refresh] No session configured. Standing by. "
+          "Push via /api/admin/set-session or set QUOTEX_SESSION_JSON.")
 
     while True:
+        time.sleep(WATCH_INTERVAL)
+        # Reload env var every minute in case it was set externally
+        new_env = os.environ.get("QUOTEX_SESSION_JSON", "")
+        if new_env and new_env != SESSION_JSON_ENV:
+            if load_env_session():
+                return True
+        if SESSION_PATH.exists():
+            try:
+                data = json.loads(SESSION_PATH.read_text())
+                if data.get("token"):
+                    print("[auto_refresh] External session detected")
+                    return True
+            except Exception:
+                pass
+
+
+def refresh_loop():
+    wait_for_first_session()
+    print(f"[auto_refresh] Session ready. Refreshing every {REFRESH_INTERVAL // 3600}h")
+
+    while True:
+        time.sleep(REFRESH_INTERVAL)
         session = fetch_fresh_session()
         if session:
             write_session(session)
-            apply_to_collector(session)
-            time.sleep(REFRESH_INTERVAL)
+            apply_to_collector()
         else:
-            print(f"[auto_refresh] Refresh failed. Retry in {RETRY_INTERVAL // 60} min")
-            time.sleep(RETRY_INTERVAL)
+            print(f"[auto_refresh] Refresh failed. Backing off {BACKOFF_AFTER_FAIL // 3600}h")
+            time.sleep(BACKOFF_AFTER_FAIL)
 
 
 def start_background_refresher():
