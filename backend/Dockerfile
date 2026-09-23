@@ -24,7 +24,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
     CMD curl -fsS http://localhost:10000/api/status || exit 1
 
 # Generate entrypoint.sh from base64 at build time (bypasses git line-ending corruption)
-RUN printf '%s' 'IyEvYmluL3NoCnNldCAtZQoKZWNobyAiW2VudHJ5cG9pbnRdIFN0YXJ0aW5nIHNlcnZlciB3aXRoIGJhY2tncm91bmQgYXV0by1yZWZyZXNoLi4uIgpleGVjIHB5dGhvbiAtYyAiCmltcG9ydCB0aHJlYWRpbmcsIG9zCmltcG9ydCBhdXRvX3JlZnJlc2gKaW1wb3J0IHNlcnZlcgp0aHJlYWRpbmcuVGhyZWFkKHRhcmdldD1hdXRvX3JlZnJlc2gucmVmcmVzaF9sb29wLCBkYWVtb249VHJ1ZSwgbmFtZT0nQXV0b1JlZnJlc2gnKS5zdGFydCgpCnNlcnZlci5hcHAucnVuKGhvc3Q9JzAuMC4wLjAnLCBwb3J0PWludChvcy5lbnZpcm9uLmdldCgnUE9SVCcsIDEwMDAwKSksIGRlYnVnPUZhbHNlKQoiCg==' | base64 -d > /app/entrypoint.sh && \
+RUN printf '%s' 'IyEvYmluL3NoCnNldCAtZQoKZWNobyAiW2VudHJ5cG9pbnRdIFN0YXJ0aW5nIHNlcnZlciB3aXRoIGJhY2tncm91bmQgYXV0by1yZWZyZXNoLi4uIgoKZXhlYyBweXRob24gLWMgIgppbXBvcnQgdGhyZWFkaW5nLCBvcwppbXBvcnQgYXV0b19yZWZyZXNoCmltcG9ydCBzZXJ2ZXIKaW1wb3J0IHF1b3RleF9jb2xsZWN0b3IgYXMgcWMKCiMgU1RBUlQgVEhFIENPTExFQ1RPUiBUSFJFQUQgKGNyaXRpY2FsKQpxYy5zdGFydF9jb2xsZWN0b3JfdGhyZWFkKCkKcHJpbnQoJ1tlbnRyeXBvaW50XSBDb2xsZWN0b3IgdGhyZWFkIHN0YXJ0ZWQnKQoKIyBTVEFSVCBBVVRPLVJFRlJFU0ggVEhSRUFECnRocmVhZGluZy5UaHJlYWQodGFyZ2V0PWF1dG9fcmVmcmVzaC5yZWZyZXNoX2xvb3AsIGRhZW1vbj1UcnVlLCBuYW1lPSdBdXRvUmVmcmVzaCcpLnN0YXJ0KCkKcHJpbnQoJ1tlbnRyeXBvaW50XSBBdXRvLXJlZnJlc2ggdGhyZWFkIHN0YXJ0ZWQnKQoKIyBSVU4gRkxBU0sKc2VydmVyLmFwcC5ydW4oaG9zdD0nMC4wLjAuMCcsIHBvcnQ9aW50KG9zLmVudmlyb24uZ2V0KCdQT1JUJywgMTAwMDApKSwgZGVidWc9RmFsc2UpCiIK' | base64 -d > /app/entrypoint.sh && \
     chmod +x /app/entrypoint.sh && \
     head -1 /app/entrypoint.sh && \
     echo '--- entrypoint.sh written ---'
