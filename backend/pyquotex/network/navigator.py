@@ -1,4 +1,4 @@
-"""Async HTTP browser client using curl_cffi for Quotex API communication."""
+﻿"""Async HTTP browser client using curl_cffi for Quotex API communication."""
 import logging
 from typing import Any, Optional
 
@@ -18,7 +18,7 @@ from pyquotex.network.ssl_utils import (
     CIPHER_SUITE_CHROME
 )
 
-USER_AGENT_DEFAULT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+USER_AGENT_DEFAULT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) Gecko/20100101 Firefox/127.0"
 
 # Patch Response class to support is_success property if absent
 if not hasattr(Response, "is_success"):
@@ -61,7 +61,7 @@ class Browser:
                 "headers": self.headers,
                 "timeout": 30.0,
                 "allow_redirects": True,
-                "impersonate": "chrome120",
+                "impersonate": "firefox135",
                 # curl_cffi uses 'verify=False' for insecure requests, but we manage our own ssl context in websocket.
                 # For HTTP, curl_cffi's impersonate handles the TLS handshake automatically.
             }
@@ -203,7 +203,7 @@ class Browser:
         )
 
         if self.debug:
-            logger.debug(f"→ {method} {url}")
+            logger.debug(f"â†’ {method} {url}")
             logger.debug(f"Status: {self.response.status_code}")
             logger.debug(f"Headers enviados: {merged_headers}")
             logger.debug(f"Headers recebidos: {dict(self.response.headers)}")
