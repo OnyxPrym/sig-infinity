@@ -53,3 +53,9 @@ backend/*:memory:*
 *.db-shm
 *.db-wal
 backend/:memory:*
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.class
+
