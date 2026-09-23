@@ -1,5 +1,5 @@
-"""
-quotex_collector.py Ã¢â‚¬â€ WebSocket streaming edition.
+﻿"""
+quotex_collector.py ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â WebSocket streaming edition.
 
 Replaces the 3-second polling loop (get_candles, ~2-3 min behind) with the
 real-time WebSocket stream (start_realtime_candle, sub-second updates).
@@ -32,10 +32,10 @@ SESSION_FILE = Path(__file__).parent / "session.json"
 DB_PATH = str(Path(__file__).parent / "sig_infinity.db")
 turso_db.set_local_fallback_path(DB_PATH)
 
-# _FLIP_LOCK_V1 Ã¢â‚¬â€ prevents double-fire of the same flip when two coroutines race
+# _FLIP_LOCK_V1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â prevents double-fire of the same flip when two coroutines race
 _FLIP_LOCK = threading.Lock()
 
-# OPTIMIZATION: per-symbol SuperTrend cache Ã¢â‚¬â€ avoids recomputing on every tick
+# OPTIMIZATION: per-symbol SuperTrend cache ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â avoids recomputing on every tick
 _TREND_CACHE = {}
 
 STATE = {
@@ -48,7 +48,7 @@ STATE = {
     "flips": {},
 }
 
-# â”€â”€â”€ AUTO_REFRESH_V1: reconnect signal from auto_refresh.py â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ AUTO_REFRESH_V1: reconnect signal from auto_refresh.py Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 _RECONNECT_EVENT = threading.Event()
 
 
@@ -56,7 +56,7 @@ def force_reconnect():
     """Called by auto_refresh.py after writing a fresh session.json.
     Signals the current _run_all() to exit cleanly so the outer retry loop
     reloads session.json and reconnects with the new SSID."""
-    print("[collector] force_reconnect() called â€” signalling loop to exit")
+    print("[collector] force_reconnect() called Ã¢â‚¬â€ signalling loop to exit")
     STATE["refresh_pending"] = True
     _RECONNECT_EVENT.set()
 
@@ -66,7 +66,7 @@ def _reconnect_requested() -> bool:
         _RECONNECT_EVENT.clear()
         return True
     return False
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 
 def _normalize_candle(c):
@@ -86,7 +86,7 @@ def _normalize_candle(c):
     }
 
 
-# Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ OPTIMIZATION: persistent DB connection Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+# ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ OPTIMIZATION: persistent DB connection ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 _DB_CONN = None
 _DB_LOCK = threading.Lock()
 
@@ -122,7 +122,7 @@ def save_candles_batch(symbol, candles):
         return inserted
 
 
-# Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ FASTER_REACTION_V1 Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+# ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ FASTER_REACTION_V1 ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 # Per-symbol trend cache: the full trend/band arrays are computed once, then
 # only the LAST bar is recomputed on every tick. The full array is refreshed
 # only when a new candle starts (minute rollover).
@@ -214,7 +214,7 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
 
             # Did the candle roll over to a new minute?
             if ts_dt != ts_list[-1]:
-                # New candle Ã¢â‚¬â€ append a new bar and recompute it
+                # New candle ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â append a new bar and recompute it
                 close.append(price)
                 high.append(high_p)
                 low.append(low_p)
@@ -226,7 +226,7 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
                 trend.append(trend[-1])
                 cached["n"] = len(close)
             else:
-                # Same candle Ã¢â‚¬â€ update the last bar
+                # Same candle ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â update the last bar
                 close[-1] = price
                 high[-1] = high_p
                 low[-1] = low_p
@@ -413,7 +413,7 @@ async def _fetch_history(client, app_symbol, quotex_asset):
 
 
 async def _stream_loop(client, app_symbol, quotex_asset):
-    """FASTTICK_V4 Ã¢â‚¬â€ real-time tick aggregator with keep-alive writes."""
+    """FASTTICK_V4 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â real-time tick aggregator with keep-alive writes."""
     import time as _time
 
     sub_ok = False
@@ -435,7 +435,7 @@ async def _stream_loop(client, app_symbol, quotex_asset):
     last_tick_wall = _time.time()
     last_heartbeat = _time.time()
 
-    while STATE["running"] and not _reconnect_requested():
+    while STATE["running"]:
         try:
             tick = client.api.realtime_candles.get(quotex_asset) if client.api else None
             now_ts = _time.time()
@@ -540,8 +540,8 @@ async def _run_all():
     print("[quotex] Starting WebSocket stream (real-time)...")
     await asyncio.gather(*[_stream_loop(client, s, a) for s, a in OTC_MARKETS.items()])
 
-    # AUTO_REFRESH_V1: gather returned â€” either stop_collector() or force_reconnect()
-    print("[quotex] Stream loop exited â€” closing client")
+    # AUTO_REFRESH_V1: gather returned Ã¢â‚¬â€ either stop_collector() or force_reconnect()
+    print("[quotex] Stream loop exited Ã¢â‚¬â€ closing client")
     try:
         await client.close()
     except Exception as e:
@@ -550,7 +550,7 @@ async def _run_all():
 
 def collector_thread_main():
     STATE["running"] = True
-    while STATE["running"] and not _reconnect_requested():
+    while STATE["running"]:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
