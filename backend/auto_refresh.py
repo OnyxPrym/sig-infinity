@@ -1,4 +1,4 @@
-"""
+﻿"""
 Auto-refresh Quotex session with strict guard.
 
 - If no session exists (no env var, no session.json), do NOTHING.
@@ -50,7 +50,7 @@ def load_env_session():
         print(f"[auto_refresh] Loaded session from env (ssid={data['token'][:16]}...)")
         return True
     except Exception as e:
-        print(f"[auto_refresh] Invalid QUOTEX_SESSION_JSON: {e}")
+        print(f"[auto_refresh] Invalid QUOTEX_SESSION_JSON (empty or malformed): {repr(SESSION_JSON_ENV[:50])}")
         return False
 
 
@@ -85,7 +85,7 @@ def fetch_fresh_session():
         print(f"[auto_refresh] POST /sign-in/ -> {r.status_code}")
 
         if 'name="keep_code"' in r.text:
-            print("[auto_refresh] 2FA required — cannot auto-refresh")
+            print("[auto_refresh] 2FA required â€” cannot auto-refresh")
             return None
 
         if "/trade" not in str(r.url):
