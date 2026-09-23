@@ -2,6 +2,7 @@
 Sig Infinity AI - Master Server (Quotex + DB-backed quota)
 """
 import os
+import json
 import atexit
 import signal
 import sys
@@ -492,6 +493,33 @@ def approaching(symbol):
 #  AUTH HELPERS
 # ---------------------------------------------------------------------------
 SESSION_DURATION_SECONDS = 7 * 24 * 60 * 60
+
+
+
+
+# ---------------------------------------------------------------------------
+#  ADMIN: Update Quotex session live (no redeploy needed)
+# ---------------------------------------------------------------------------
+@app.route("/api/admin/set-session", methods=["POST"])
+def set_session_endpoint():
+    token = request.headers.get("X-Admin-Token", "")
+    if token != ADMIN_PASSCODE:
+        return jsonify({"ok": False, "message": "unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    if not data.get("token"):
+        return jsonify({"ok": False, "message": "missing token"}), 400
+
+    session_path = Path(__file__).parent / "session.json"
+    session_path.write_text(json.dumps(data, indent=4))
+
+    try:
+        qc.force_reconnect()
+        print(f"[set-session] Collector reconnect signalled (new ssid={data['token'][:16]}...)")
+    except Exception as e:
+        print(f"[set-session] Reconnect signal failed: {e}")
+
+    return jsonify({"ok": True, "message": "Session updated, collector reconnecting"})
 
 
 def get_current_user():
