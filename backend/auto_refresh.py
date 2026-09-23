@@ -1,14 +1,16 @@
-﻿"""
-Auto-refresh Quotex session every 2 hours.
-Runs inside the container, alongside server.py.
-Reconnects the WebSocket with fresh credentials on success.
+"""
+Auto-refresh Quotex session.
+
+Priority:
+1. If QUOTEX_SESSION_JSON env var is set, use it directly (no HTTP login).
+2. Every REFRESH_INTERVAL_SECONDS, try to refresh via HTTP login.
+3. If refresh fails, keep using the existing session.json.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
-import sys
 import threading
 import time
 from pathlib import Path
@@ -17,150 +19,146 @@ from curl_cffi import requests
 
 BASE = "https://qxbroker.com"
 LANG = "en"
-IMPERSONATE = "firefox133"
+IMPERSONATE = "firefox135"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:127.0) Gecko/20100101 Firefox/127.0"
 
-REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL_SECONDS", 2 * 60 * 60))  # 2h
-RETRY_INTERVAL = 5 * 60                                                          # 5m
+REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL_SECONDS", 2 * 60 * 60))
+RETRY_INTERVAL = 5 * 60
 
 EMAIL = os.environ.get("QUOTEX_EMAIL", "moetaesibiz@gmail.com")
 PASSWORD = os.environ.get("QUOTEX_PASSWORD", "")
+SESSION_JSON_ENV = os.environ.get("QUOTEX_SESSION_JSON", "")
 
 SESSION_PATH = Path(__file__).parent / "session.json"
 
 
-def _cookies_to_header(jar: dict[str, str]) -> str:
+def _cookies_to_header(jar):
     return "; ".join(f"{k}={v}" for k, v in jar.items())
 
 
-def fetch_fresh_session() -> dict | None:
-    """Login to Quotex and return {cookies, token, user_agent} or None."""
-    if not PASSWORD:
-        print("[auto_refresh] QUOTEX_PASSWORD not set")
-        return None
+def load_env_session():
+    """If QUOTEX_SESSION_JSON is set, write it to session.json on boot."""
+    if not SESSION_JSON_ENV:
+        return False
+    try:
+        data = json.loads(SESSION_JSON_ENV)
+        if not data.get("token"):
+            print("[auto_refresh] QUOTEX_SESSION_JSON has no token")
+            return False
+        SESSION_PATH.write_text(json.dumps(data, indent=4))
+        print(f"[auto_refresh] Loaded session from env (ssid={data['token'][:16]}...)")
+        return True
+    except Exception as e:
+        print(f"[auto_refresh] Invalid QUOTEX_SESSION_JSON: {e}")
+        return False
 
+
+def fetch_fresh_session():
+    if not PASSWORD:
+        return None
     try:
         s = requests.Session(impersonate=IMPERSONATE)
         s.headers.update({"User-Agent": UA, "Accept-Language": "en-US,en;q=0.5"})
 
         r = s.get(f"{BASE}/{LANG}", timeout=20)
+        print(f"[auto_refresh] GET /{LANG} -> {r.status_code}")
         if r.status_code != 200:
-            print(f"[auto_refresh] GET /{LANG} -> {r.status_code}")
             return None
 
         r = s.get(f"{BASE}/{LANG}/sign-in/modal/", timeout=20)
-        m = re.search(
-            r'<input[^>]*name=["\']_token["\'][^>]*value=["\']([^"\']+)["\']', r.text
-        )
+        m = re.search(r'name="_token"\s+value="([^"]+)"', r.text)
         if not m:
-            print("[auto_refresh] No _token in modal page")
+            m = re.search(r'value="([^"]+)"\s+name="_token"', r.text)
+        if not m:
+            print("[auto_refresh] No _token in modal")
             return None
         token = m.group(1)
 
-        r = s.post(
-            f"{BASE}/{LANG}/sign-in/",
-            data={"_token": token, "email": EMAIL, "password": PASSWORD, "remember": 1},
-            headers={
-                "Referer": f"{BASE}/{LANG}/sign-in",
-                "Origin": BASE,
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            timeout=20,
-        )
+        r = s.post(f"{BASE}/{LANG}/sign-in/", data={
+            "_token": token, "email": EMAIL, "password": PASSWORD, "remember": 1,
+        }, headers={
+            "Referer": f"{BASE}/{LANG}/sign-in",
+            "Origin": BASE,
+            "Content-Type": "application/x-www-form-urlencoded",
+        }, timeout=20)
+        print(f"[auto_refresh] POST /sign-in/ -> {r.status_code}")
 
         if 'name="keep_code"' in r.text:
-            print("[auto_refresh] 2FA is enabled — cannot auto-refresh. "
-                  "Disable 2FA on the Quotex account.")
+            print("[auto_refresh] 2FA required — cannot auto-refresh")
             return None
 
         if "/trade" not in str(r.url):
             r = s.get(f"{BASE}/{LANG}/trade", timeout=20)
 
-        ssid = None
-        m = re.search(r"window\.settings\s*=\s*(\{.*?\});", r.text, re.S)
-        if m:
-            try:
-                ssid = json.loads(m.group(1)).get("token")
-            except Exception:
-                pass
-
-        if not ssid:
-            r2 = s.get(
-                f"{BASE}/api/v1/cabinets/digest",
-                headers={"Referer": f"{BASE}/{LANG}/trade"},
-                timeout=20,
-            )
-            if r2.status_code == 200:
-                try:
-                    ssid = r2.json().get("data", {}).get("token")
-                except Exception:
-                    pass
-
-        if not ssid:
-            print("[auto_refresh] Could not extract SSID")
+        m = re.search(r'"token"\s*:\s*"([a-f0-9]{32})"', r.text)
+        if not m:
+            print("[auto_refresh] No SSID pattern in trade page")
             return None
 
+        ssid = m.group(1)
+        print(f"[auto_refresh] New SSID: {ssid[:20]}...")
         return {
             "cookies": _cookies_to_header(s.cookies.get_dict()),
             "token": ssid,
             "user_agent": UA,
         }
-
     except Exception as e:
-        print(f"[auto_refresh] Login error: {e}")
+        print(f"[auto_refresh] HTTP error: {e}")
         return None
 
 
-def write_session(session: dict) -> None:
+def write_session(session):
     SESSION_PATH.write_text(json.dumps(session, indent=4))
-    print(f"[auto_refresh] Wrote {SESSION_PATH} (ssid={session['token'][:16]}…)")
+    print(f"[auto_refresh] Wrote {SESSION_PATH}")
 
 
-def apply_to_running_collector(session: dict) -> None:
-    """Best-effort: update the live collector's session + force reconnect."""
+def apply_to_collector(session):
     try:
         import quotex_collector as qc
-
-        if hasattr(qc, "STATE"):
-            qc.STATE["session_loaded"] = True
-
-        # If collector exposes a reconnect hook, call it
-        for name in ("force_reconnect", "reload_session", "reconnect"):
-            fn = getattr(qc, name, None)
-            if callable(fn):
-                try:
-                    fn()
-                    print(f"[auto_refresh] Called quotex_collector.{name}()")
-                    return
-                except Exception as e:
-                    print(f"[auto_refresh] {name}() failed: {e}")
-
-        print("[auto_refresh] No reconnect hook on quotex_collector — "
-              "session.json updated, collector will pick it up on next reconnect")
+        fn = getattr(qc, "force_reconnect", None)
+        if callable(fn):
+            fn()
+            print("[auto_refresh] Signalled collector to reconnect")
     except Exception as e:
         print(f"[auto_refresh] Could not poke collector: {e}")
 
 
-def refresh_loop() -> None:
-    """Background loop: refresh every 2h, retry every 5m on failure."""
-    # Small initial delay so server.py finishes booting
-    time.sleep(15)
+def refresh_loop():
+    # On boot: try env first, then HTTP
+    have_session = load_env_session()
 
-    while True:
-        print(f"[auto_refresh] Refreshing Quotex session (interval={REFRESH_INTERVAL}s)...")
+    if not have_session:
+        print("[auto_refresh] No env session — trying HTTP login on boot")
         session = fetch_fresh_session()
-
         if session:
             write_session(session)
-            apply_to_running_collector(session)
-            print(f"[auto_refresh] Next refresh in {REFRESH_INTERVAL // 3600}h")
+            have_session = True
+
+    if not have_session and not SESSION_PATH.exists():
+        print("[auto_refresh] No session available. Retrying every 5 min...")
+        while True:
+            time.sleep(RETRY_INTERVAL)
+            session = fetch_fresh_session()
+            if session:
+                write_session(session)
+                apply_to_collector(session)
+                break
+
+    print(f"[auto_refresh] Session ready. Next refresh in {REFRESH_INTERVAL // 60} min")
+    time.sleep(REFRESH_INTERVAL)
+
+    while True:
+        session = fetch_fresh_session()
+        if session:
+            write_session(session)
+            apply_to_collector(session)
             time.sleep(REFRESH_INTERVAL)
         else:
-            print(f"[auto_refresh] Refresh failed. Retry in {RETRY_INTERVAL // 60}m")
+            print(f"[auto_refresh] Refresh failed. Retry in {RETRY_INTERVAL // 60} min")
             time.sleep(RETRY_INTERVAL)
 
 
-def start_background_refresher() -> threading.Thread:
+def start_background_refresher():
     t = threading.Thread(target=refresh_loop, daemon=True, name="AutoRefresh")
     t.start()
     return t
