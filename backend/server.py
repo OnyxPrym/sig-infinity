@@ -28,6 +28,65 @@ import analysis as an
 import quotex_collector as qc
 import turso_db
 
+# -----------------------------------------------------------
+# INIT_AUTH_DB_V1: Ensure tables exist in Turso at import time
+# -----------------------------------------------------------
+def _ensure_tables():
+    tables_sql = [
+        """CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            is_admin INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            expires_at REAL NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS user_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            symbol TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            entry_price REAL NOT NULL,
+            entry_time TEXT NOT NULL,
+            expiry_time TEXT NOT NULL,
+            result TEXT,
+            resolved INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP)""",
+        """CREATE TABLE IF NOT EXISTS quota (
+            ip TEXT NOT NULL,
+            day TEXT NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (ip, day))""",
+        """CREATE TABLE IF NOT EXISTS admins (
+            ip TEXT PRIMARY KEY,
+            unlocked_at TEXT NOT NULL)""",
+        """CREATE TABLE IF NOT EXISTS bot_session (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            ssid TEXT NOT NULL,
+            cookies TEXT,
+            user_agent TEXT,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP)""",
+    ]
+    try:
+        conn = turso_db.connect()
+        for sql in tables_sql:
+            try:
+                conn.execute(sql)
+            except Exception as e:
+                print("[init_db] %s" % e)
+        conn.commit()
+        print("[init_db] Turso tables ensured")
+    except Exception as e:
+        print("[init_db] Failed: %s" % e)
+
+try:
+    _ensure_tables()
+except Exception as e:
+    print("[init_db] init error: %s" % e)
+
 ADMIN_PASSCODE = os.environ.get("ADMIN_PASSCODE", "karanka100")
 DAILY_FREE_LIMIT = 40
 
