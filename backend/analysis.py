@@ -1,4 +1,4 @@
-"""
+﻿"""
 Sig Infinity AI - Analysis Engine
 Proprietary signal engine. Internal logic is not exposed.
 """
@@ -26,7 +26,7 @@ def _true_range(df):
 
 
 def _atr(df, period):
-    # Wilder's smoothing (RMA) — matches TradingView ta.atr() and Quotex's SuperTrend.
+    # Wilder's smoothing (RMA) â€” matches TradingView ta.atr() and Quotex's SuperTrend.
     tr = _true_range(df)
     return tr.ewm(alpha=1.0 / period, adjust=False).mean()
 
@@ -111,7 +111,8 @@ def analyze_symbol(df_1m, symbol, cooldown_tracker=None, current_time=None):
     if "timestamp" not in df_1m.columns:
         return _wait(symbol, "Data format error.")
 
-    df = df_1m.copy()
+    df = df_1m.copy()  # MEMORY_TRIM_V1
+    if len(df) > 200: df = df.iloc[-200:].reset_index(drop=True)
     df["timestamp"] = pd.to_datetime(df["timestamp"])
 
     # Compute internal trend state
