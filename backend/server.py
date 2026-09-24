@@ -148,6 +148,25 @@ def healthz():
 DB_PATH = str(Path(__file__).parent / "sig_infinity.db")
 turso_db.set_local_fallback_path(DB_PATH)
 
+
+
+# --- CANDLE_COUNT_REFRESHER_V1 ---
+def candle_count_refresher():
+    """Refresh candle counts in background every 60s so /api/status never blocks."""
+    import time as _t
+    _t.sleep(10)  # initial delay
+    while True:
+        try:
+            for sym in qc.OTC_MARKETS:
+                try:
+                    candle_count(sym)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[candle_count_refresher] error: {e}")
+        _t.sleep(60)
+
+
 def _checkpoint_and_close():
     """Force WAL checkpoint so sig_infinity.db is complete on shutdown."""
     try:
@@ -566,6 +585,7 @@ def debug_analysis(symbol):
 def control_start():
     if not qc.STATE["running"]:
         qc.start_collector_thread()
+    threading.Thread(target=candle_count_refresher, daemon=True, name="CandleCountRefresher").start()
     return jsonify({"ok": True, "collector_running": qc.STATE["running"]})
 
 
@@ -975,6 +995,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("Starting Quotex collector...")
     qc.start_collector_thread()
+    threading.Thread(target=candle_count_refresher, daemon=True, name="CandleCountRefresher").start()
     time.sleep(1)
     print("Starting Flask API on port 10000")
     print("=" * 60)
