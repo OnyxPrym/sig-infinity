@@ -137,6 +137,14 @@ import time as _time
 _STATUS_CACHE = {"data": None, "at": 0}
 _STATUS_CACHE_TTL = 10
 
+
+
+@app.route("/healthz")
+def healthz():
+    """Ultra-fast health check. No DB, no I/O. For Render only."""
+    return "ok", 200
+
+
 DB_PATH = str(Path(__file__).parent / "sig_infinity.db")
 turso_db.set_local_fallback_path(DB_PATH)
 
