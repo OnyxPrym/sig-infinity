@@ -113,9 +113,29 @@ def save_candles_batch(symbol, candles):
                 )
                 inserted += 1
             except Exception as e:
-                print("[quotex] save error %s: %s" % (symbol, e))
-        conn.commit()
-        turso_db.sync(conn)
+                err_msg = str(e)
+                if "stream not found" in err_msg or "404" in err_msg:
+                    print("[quotex] Turso stream broken, reconnecting...")
+                    _reset_db()
+                    conn = _get_db()
+                    try:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO candles (source, symbol, timestamp, open, high, low, close, volume) VALUES ('quotex', ?, ?, ?, ?, ?, ?, ?)",
+                            (symbol, ts, c["open"], c["high"], c["low"], c["close"], c["ticks"]),
+                        )
+                        inserted += 1
+                    except Exception as e2:
+                        print("[quotex] save retry failed %s: %s" % (symbol, e2))
+                else:
+                    print("[quotex] save error %s: %s" % (symbol, err_msg))
+        try:
+            conn.commit()
+            turso_db.sync(conn)
+        except Exception as e:
+            err = str(e)
+            if "stream not found" in err or "404" in err:
+                _reset_db()
+            print("[quotex] commit failed: %s" % err)
         return inserted
 
 
