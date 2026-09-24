@@ -128,6 +128,15 @@ def _handle_preflight():
         return response
 
 
+
+
+# -----------------------------------------------------------
+# STATUS_CACHE_V1: cache /api/status for 10s to pass Render health check
+# -----------------------------------------------------------
+import time as _time
+_STATUS_CACHE = {"data": None, "at": 0}
+_STATUS_CACHE_TTL = 10
+
 DB_PATH = str(Path(__file__).parent / "sig_infinity.db")
 turso_db.set_local_fallback_path(DB_PATH)
 
