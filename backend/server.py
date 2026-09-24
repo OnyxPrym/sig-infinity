@@ -303,14 +303,26 @@ def load_candles(symbol, limit=300):
     return df
 
 
+_CANDLE_COUNT_CACHE = {}
+_CANDLE_COUNT_TTL = 30
+
 def candle_count(symbol):
-    conn = turso_db.connect()
-    n = conn.execute(
-        "SELECT COUNT(*) FROM candles WHERE source='quotex' AND symbol=?",
-        (symbol,),
-    ).fetchone()[0]
-    conn.close()
-    return n
+    now = _time.time()
+    cached = _CANDLE_COUNT_CACHE.get(symbol)
+    if cached and (now - cached[1]) < _CANDLE_COUNT_TTL:
+        return cached[0]
+    try:
+        conn = turso_db.connect()
+        n = conn.execute(
+            "SELECT COUNT(*) FROM candles WHERE source='quotex' AND symbol=?",
+            (symbol,),
+        ).fetchone()[0]
+        conn.close()
+        _CANDLE_COUNT_CACHE[symbol] = (n, now)
+        return n
+    except Exception as e:
+        print(f"[candle_count] error {symbol}: {e}")
+        return cached[0] if cached else 0
 
 
 # ---------------------------------------------------------------------------
