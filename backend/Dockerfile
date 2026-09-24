@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+﻿FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl ca-certificates sqlite3 \
@@ -15,7 +15,7 @@ RUN mkdir -p /data
 
 ENV PYTHONUNBUFFERED=1 \
     PORT=10000 \
-    DB_PATH=/data/sig_infinity.db \
+    DB_PATH=/tmp/sig_infinity.db \
     REFRESH_INTERVAL_SECONDS=7200
 
 EXPOSE 10000
