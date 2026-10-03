@@ -16,14 +16,40 @@ import analysis as _an
 import turso_db
 import pandas as pd
 
-OTC_MARKETS = {
-    "XAUUSD": "XAUUSD",
-    "EURUSD": "EURUSD",
-    "USDJPY": "USDJPY",
-    "XAGUSD": "XAGUSD",
-    "GBPUSD": "GBPUSD",
-    "AUDCHF": "AUDCHF",
-}
+# ============================================================
+#  OTC / LIVE symbol resolver (auto-switching)
+#  - Gold is OTC 24/7
+#  - Others use LIVE on weekdays and _otc on weekends
+# ============================================================
+ALWAYS_OTC = {"XAUUSD"}
+APP_SYMBOLS = ["XAUUSD", "EURUSD", "USDJPY", "XAGUSD", "GBPUSD", "AUDCHF"]
+
+
+def _market_is_closed_utc():
+    now = datetime.now(timezone.utc)
+    wd, hr = now.weekday(), now.hour
+    if wd == 4 and hr >= 21:
+        return True
+    if wd == 5:
+        return True
+    if wd == 6 and hr < 21:
+        return True
+    return False
+
+
+def resolve_quotex_symbol(app_symbol):
+    if app_symbol in ALWAYS_OTC:
+        return app_symbol + "_otc"
+    if _market_is_closed_utc():
+        return app_symbol + "_otc"
+    return app_symbol
+
+
+def is_otc_now(app_symbol):
+    return resolve_quotex_symbol(app_symbol).endswith("_otc")
+
+
+OTC_MARKETS = {s: resolve_quotex_symbol(s) for s in APP_SYMBOLS}
 HISTORICAL_CANDLES = 100
 PERIOD = 60
 STREAM_TICK_SLEEP = 0.3  # FASTTICK_V5  # FASTTICK_V5 - 300ms loop  # FASTTICK_V4
@@ -435,7 +461,7 @@ def load_session():
 async def _fetch_history(client, app_symbol, quotex_asset):
     try:
         candles = await client.get_historical_candles(
-            quotex_asset, HISTORICAL_CANDLES * 60, PERIOD,
+            resolve_quotex_symbol(app_symbol), HISTORICAL_CANDLES * 60, PERIOD,
             timeout=45, max_workers=FETCH_WORKERS,
         )
         if candles:
@@ -455,7 +481,7 @@ async def _stream_loop(client, app_symbol, quotex_asset):
     sub_ok = False
     for attempt in range(1, 6):
         try:
-            await client.start_candles_stream(quotex_asset, PERIOD)
+            await client.start_candles_stream(resolve_quotex_symbol(app_symbol), PERIOD)
             sub_ok = True
             print("[quotex] %s subscribed (attempt %d)" % (app_symbol, attempt))
             break
@@ -473,7 +499,7 @@ async def _stream_loop(client, app_symbol, quotex_asset):
 
     while STATE["running"]:
         try:
-            tick = client.api.realtime_candles.get(quotex_asset) if client.api else None
+            tick = client.api.realtime_candles.get(resolve_quotex_symbol(app_symbol)) if client.api else None
             now_ts = _time.time()
             now_minute = int(now_ts // 60) * 60
 
@@ -516,12 +542,12 @@ async def _stream_loop(client, app_symbol, quotex_asset):
             if now_ts - last_tick_wall > 15:
                 print("[quotex] %s no ticks for 15s, full reset" % app_symbol)
                 try:
-                    await client.stop_candles_stream(quotex_asset)
+                    await client.stop_candles_stream(resolve_quotex_symbol(app_symbol))
                 except Exception as e:
                     print("[quotex] %s stop error: %s" % (app_symbol, e))
                 await asyncio.sleep(0.5)
                 try:
-                    await client.start_candles_stream(quotex_asset, PERIOD)
+                    await client.start_candles_stream(resolve_quotex_symbol(app_symbol), PERIOD)
                     print("[quotex] %s re-subscribed OK" % app_symbol)
                 except Exception as e:
                     print("[quotex] %s re-subscribe failed: %s" % (app_symbol, e))
@@ -642,3 +668,4 @@ def init_db():
     conn.commit()
     turso_db.sync(conn)
     conn.close()
+

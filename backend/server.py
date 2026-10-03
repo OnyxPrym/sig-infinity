@@ -26,6 +26,7 @@ except ImportError:
 import pandas as pd
 import analysis as an
 import quotex_collector as qc
+qc.APP_SYMBOLS = ['XAUUSD','EURUSD','USDJPY','XAGUSD','GBPUSD','AUDCHF']
 import turso_db
 
 # -----------------------------------------------------------
@@ -91,6 +92,17 @@ ADMIN_PASSCODE = os.environ.get("ADMIN_PASSCODE", "karanka100")
 DAILY_FREE_LIMIT = 40
 
 app = Flask(__name__)
+@app.route('/api/market-status', methods=['GET'])
+def market_status():
+    try:
+        out = []
+        for smb in qc.APP_SYMBOLS:
+            otc = qc.is_otc_now(smb)
+            out.append({'app_symbol': smb, 'is_otc': otc, 'label': smb + (' OTC' if otc else ' LIVE')})
+        return jsonify({'ok': True, 'symbols': out})
+    except Exception as e:
+        return jsonify({'ok': False, 'message': str(e)}), 500
+
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "sig-infinity-dev-secret")
 
 CORS(app,
@@ -1000,6 +1012,7 @@ if __name__ == "__main__":
     print("Starting Flask API on port 10000")
     print("=" * 60)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False)
+
 
 
 
