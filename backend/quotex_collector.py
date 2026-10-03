@@ -475,96 +475,69 @@ async def _fetch_history(client, app_symbol, quotex_asset):
 
 
 async def _stream_loop(client, app_symbol, quotex_asset):
-    """FASTTICK_V4 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â real-time tick aggregator with keep-alive writes."""
+    '''Fetch Quotex official 1-minute candles every 5s and run SuperTrend.
+    This makes the bot match Quotex's chart exactly.'''
     import time as _time
 
-    sub_ok = False
-    for attempt in range(1, 6):
-        try:
-            await client.start_candles_stream(resolve_quotex_symbol(app_symbol), PERIOD)
-            sub_ok = True
-            print("[quotex] %s subscribed (attempt %d)" % (app_symbol, attempt))
-            break
-        except Exception as e:
-            print("[quotex] %s subscribe attempt %d failed: %s" % (app_symbol, attempt, e))
-            await asyncio.sleep(2)
-    if not sub_ok:
-        print("[quotex] %s could not subscribe after 5 attempts; retrying in 10s" % app_symbol)
+    POLL_INTERVAL = 5
+    HISTORY_COUNT = 250
 
-    current_minute = None
-    current_candle = None
-    last_tick_ts = 0.0
-    last_tick_wall = _time.time()
+    last_candle_ts = None
     last_heartbeat = _time.time()
 
-    while STATE["running"]:
+    print('[quotex] %s: candle-fetch loop started (every %ds)' % (app_symbol, POLL_INTERVAL))
+
+    while STATE['running']:
         try:
-            tick = client.api.realtime_candles.get(resolve_quotex_symbol(app_symbol)) if client.api else None
-            now_ts = _time.time()
-            now_minute = int(now_ts // 60) * 60
+            live_asset = resolve_quotex_symbol(app_symbol)
 
-            price = None
-            if tick and isinstance(tick, list) and len(tick) >= 3:
-                tick_ts = float(tick[1])
-                if tick_ts != last_tick_ts:
-                    last_tick_ts = tick_ts
-                    last_tick_wall = now_ts
-                price = float(tick[2])
-
-            if now_minute != current_minute:
-                if current_candle is not None:
-                    try:
-                        save_candles_batch(app_symbol, [current_candle])
-                        compute_and_cache_flip(app_symbol, current_candle)
-                    except Exception as e:
-                        print("[quotex] %s finalize error: %s" % (app_symbol, e))
-                current_minute = now_minute
-                current_candle = {"time": now_minute, "open": (price if price is not None else 0), "high": (price if price is not None else 0), "low": (price if price is not None else 0), "close": (price if price is not None else 0), "ticks": (1 if price is not None else 0)}
+            candles = None
+            for method_name in ['get_candles', 'get_historical_candles']:
+                fn = getattr(client, method_name, None)
+                if fn is None:
+                    continue
                 try:
-                    save_candles_batch(app_symbol, [current_candle])
-                    compute_and_cache_flip(app_symbol, current_candle)
+                    candles = await fn(live_asset, 60, HISTORY_COUNT)
+                    if candles:
+                        break
                 except Exception as e:
-                    print("[quotex] %s new-candle write error: %s" % (app_symbol, e))
-            else:
-                if price is not None:
-                    if price > current_candle["high"]: current_candle["high"] = price
-                    if price < current_candle["low"]:  current_candle["low"]  = price
-                    current_candle["close"] = price
-                    current_candle["ticks"] += 1
-                try:
-                    save_candles_batch(app_symbol, [current_candle])
-                    compute_and_cache_flip(app_symbol, current_candle)
-                except Exception as e:
-                    print("[quotex] %s update write error: %s" % (app_symbol, e))
+                    continue
 
-            STATE["last_update_by_market"][app_symbol] = now_ts
+            if candles:
+                for c in candles:
+                    norm = _normalize_candle(c)
+                    if norm:
+                        save_candles_batch(app_symbol, [norm])
 
-            if now_ts - last_tick_wall > 15:
-                print("[quotex] %s no ticks for 15s, full reset" % app_symbol)
-                try:
-                    await client.stop_candles_stream(resolve_quotex_symbol(app_symbol))
-                except Exception as e:
-                    print("[quotex] %s stop error: %s" % (app_symbol, e))
-                await asyncio.sleep(0.5)
-                try:
-                    await client.start_candles_stream(resolve_quotex_symbol(app_symbol), PERIOD)
-                    print("[quotex] %s re-subscribed OK" % app_symbol)
-                except Exception as e:
-                    print("[quotex] %s re-subscribe failed: %s" % (app_symbol, e))
-                last_tick_wall = now_ts
-                last_tick_ts = 0.0
+                latest = _normalize_candle(candles[-1])
+                if latest:
+                    compute_and_cache_flip(app_symbol, latest)
+                    ts = latest['time']
+                    if ts != last_candle_ts:
+                        last_candle_ts = ts
+                        st = STATE['flips'].get(app_symbol) or {}
+                        if st.get('live_flip') and st.get('live_direction'):
+                            print('[quotex] %s [%s] FLIP %s at %s (close=%s)' % (
+                                app_symbol, live_asset,
+                                st['live_direction'],
+                                datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%H:%M'),
+                                latest['close']))
 
-            if now_ts - last_heartbeat > 60:
-                print("[quotex] %s heartbeat: last tick %.1fs ago, minute %s" % (app_symbol, now_ts - last_tick_wall, current_minute))
-                last_heartbeat = now_ts
+                STATE['last_update_by_market'][app_symbol] = _time.time()
+
+            if _time.time() - last_heartbeat > 60:
+                print('[quotex] %s heartbeat: candle-loop alive, last_ts=%s' % (app_symbol, last_candle_ts))
+                last_heartbeat = _time.time()
 
         except Exception as e:
-            print("[quotex] %s unexpected error: %s" % (app_symbol, e))
-            await asyncio.sleep(0.5)
+            print('[quotex] %s candle-loop error: %s' % (app_symbol, e))
 
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(POLL_INTERVAL)
 
 
+def _stream_loop_OLD_DISABLED(client, app_symbol, quotex_asset):
+    '''Old tick aggregator - disabled.'''
+    pass
 def get_flip_state(app_symbol):
     return STATE["flips"].get(app_symbol) or {"error": "not computed yet"}
 
@@ -600,7 +573,7 @@ async def _run_all():
         await asyncio.sleep(3)
 
     print("[quotex] Starting WebSocket stream (real-time)...")
-    await asyncio.gather(*[_stream_loop(client, s, a) for s, a in OTC_MARKETS.items()])
+    await asyncio.gather(*[_stream_loop(client, s, None) for s in APP_SYMBOLS])
 
     # AUTO_REFRESH_V1: gather returned Ã¢â‚¬â€ either stop_collector() or force_reconnect()
     print("[quotex] Stream loop exited Ã¢â‚¬â€ closing client")
@@ -668,5 +641,6 @@ def init_db():
     conn.commit()
     turso_db.sync(conn)
     conn.close()
+
 
 
