@@ -385,7 +385,7 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
     live_flip = (trend_curr != trend_prev) and trend_curr != 0
     live_direction = None
     if live_flip:
-        live_direction = "BUY" if trend_curr == 1 else "SELL"
+        live_direction = "SELL" if trend_curr == 1 else "BUY"
 
     with _FLIP_LOCK:
         # WHIPSAW GUARD: if a latch is active and the trend re-flips in the
@@ -668,4 +668,5 @@ def init_db():
     conn.commit()
     turso_db.sync(conn)
     conn.close()
+
 

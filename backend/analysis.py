@@ -11,6 +11,9 @@ logger = logging.getLogger("sig_infinity.analysis")
 
 class Config:
     MIN_1M_CANDLES = 60
+    FLASH_SECONDS = 15
+    CONFIRM_SECONDS = 10
+    SIGNAL_DELAY_SECONDS = FLASH_SECONDS + CONFIRM_SECONDS
     ENTRY_WINDOW_SECONDS = 30
     SIGNAL_DELAY_SECONDS = 10
     EXPIRY_MINUTES = 5
@@ -223,6 +226,7 @@ def _wait(symbol, reason, trigger_timeframe=None, forming_direction=None):
     if forming_direction:
         out["forming_direction"] = forming_direction
     return out
+
 
 
 
