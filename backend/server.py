@@ -1027,6 +1027,67 @@ def forming(symbol):
 
 
 
+
+
+# --- PHASE_ENDPOINT_V1 ---
+@app.route("/api/phase/<symbol>", methods=["GET"])
+def phase_endpoint(symbol):
+    """Compute phase directly from fresh Turso data. Reliable alternative to /api/forming."""
+    symbol = symbol.upper()
+    if symbol not in qc.OTC_MARKETS:
+        return jsonify({"ok": False, "message": "Unknown symbol"}), 400
+
+    try:
+        df = load_candles(symbol, limit=100)
+        if df.empty or len(df) < 20:
+            return jsonify({"ok": True, "forming": False, "phase": "idle"})
+
+        df_closed = df.iloc[:-1].reset_index(drop=True)
+        trend = an._supertrend(df_closed, an.Config.ATR_PERIOD, an.Config.MULTIPLIER)
+
+        curr = int(trend.iloc[-1])
+        prev = int(trend.iloc[-2])
+        prev2 = int(trend.iloc[-3]) if len(trend) > 2 else prev
+
+        if prev == prev2 or prev == 0 or prev2 == 0:
+            return jsonify({"ok": True, "forming": False, "phase": "idle",
+                            "curr": curr, "prev": prev, "prev2": prev2})
+
+        direction = "BUY" if (prev2 == -1 and prev == 1) else "SELL"
+
+        st = qc.get_flip_state(symbol)
+        flip_time = st.get("flip_time_epoch") or (time.time() - 30)
+        age = max(0, time.time() - flip_time)
+
+        orange = an.Config.FLASH_ORANGE_SECONDS
+        green = an.Config.SIGNAL_READY_SECONDS
+        close_at = green + an.Config.ENTRY_WINDOW_SECONDS
+
+        if age < orange:
+            phase = "orange_flash"
+        elif age < green:
+            phase = "green_flash"
+        elif age < close_at:
+            phase = "open"
+        else:
+            return jsonify({"ok": True, "forming": False, "phase": "idle", "expired": True})
+
+        return jsonify({
+            "ok": True,
+            "forming": True,
+            "phase": phase,
+            "direction": direction,
+            "seconds_since_flip": int(age),
+            "seconds_until_ready": max(0, int(green - age)),
+            "seconds_until_close": max(0, int(close_at - age)),
+            "curr": curr,
+            "prev": prev,
+            "prev2": prev2,
+        })
+    except Exception as e:
+        print(f"[phase] error {symbol}: {e}")
+        return jsonify({"ok": True, "forming": False, "phase": "idle"})
+
 if __name__ == "__main__":
     init_auth_db()
     init_user_signals_db()
