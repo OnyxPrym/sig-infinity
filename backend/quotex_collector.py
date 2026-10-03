@@ -1,4 +1,4 @@
-﻿"""
+"""
 quotex_collector.py ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â WebSocket streaming edition.
 
 Replaces the 3-second polling loop (get_candles, ~2-3 min behind) with the
@@ -516,95 +516,103 @@ async def _fetch_history(client, app_symbol, quotex_asset):
 
 
 async def _stream_loop(client, app_symbol, quotex_asset):
-    """FASTTICK_V4 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â real-time tick aggregator with keep-alive writes."""
+    """
+    Reads Quotex's OWN aggregated candles from candle_generated_check
+    instead of building candles from raw ticks.
+
+    This makes the bot's SuperTrend match Quotex exactly.
+    """
     import time as _time
 
+    # Subscribe to Quotex's candle stream
     sub_ok = False
     for attempt in range(1, 6):
         try:
-            await client.start_candles_stream(resolve_quotex_symbol(app_symbol), PERIOD)
+            await client.start_candles_stream(quotex_asset, PERIOD)
             sub_ok = True
-            print("[quotex] %s subscribed (attempt %d)" % (app_symbol, attempt))
+            print("[quotex] %s subscribed to QUOTEX candles (attempt %d)" % (app_symbol, attempt))
             break
         except Exception as e:
-            print("[quotex] %s subscribe attempt %d failed: %s" % (app_symbol, attempt, e))
+            print("[quotex] %s subscribe %d failed: %s" % (app_symbol, attempt, e))
             await asyncio.sleep(2)
-    if not sub_ok:
-        print("[quotex] %s could not subscribe after 5 attempts; retrying in 10s" % app_symbol)
 
-    current_minute = None
-    current_candle = None
-    last_tick_ts = 0.0
-    last_tick_wall = _time.time()
+    if not sub_ok:
+        print("[quotex] %s FAILED to subscribe after 5 attempts" % app_symbol)
+        return
+
+    last_saved_time = 0
     last_heartbeat = _time.time()
+    last_change = _time.time()
 
     while STATE["running"]:
         try:
-            tick = client.api.realtime_candles.get(resolve_quotex_symbol(app_symbol)) if client.api else None
-            now_ts = _time.time()
-            now_minute = int(now_ts // 60) * 60
+            # Read Quotex's own candle from their event stream
+            qx_candle = None
+            if client.api:
+                qx_candle = client.api.candle_generated_check.get(quotex_asset, {}).get(PERIOD)
 
-            price = None
-            if tick and isinstance(tick, list) and len(tick) >= 3:
-                tick_ts = float(tick[1])
-                if tick_ts != last_tick_ts:
-                    last_tick_ts = tick_ts
-                    last_tick_wall = now_ts
-                price = float(tick[2])
+            if qx_candle and isinstance(qx_candle, dict):
+                # Quotex sends: {"asset":..., "time":..., "open":..., "close":..., "high":..., "low":..., "period":..., "ticks":...}
+                candle_time = int(qx_candle.get("time") or qx_candle.get("timestamp") or 0)
+                if candle_time > 10_000_000_000:
+                    candle_time = candle_time // 1000
 
-            if now_minute != current_minute:
-                if current_candle is not None:
+                # Only save when Quotex provides a valid OHLC
+                o = qx_candle.get("open")
+                h = qx_candle.get("high")
+                l = qx_candle.get("low")
+                c = qx_candle.get("close")
+
+                if o is not None and h is not None and l is not None and c is not None and candle_time > 0:
+                    candle = {
+                        "time": candle_time,
+                        "open": float(o),
+                        "high": float(h),
+                        "low": float(l),
+                        "close": float(c),
+                        "ticks": int(qx_candle.get("ticks", 0)),
+                    }
+
+                    # Save on every tick (updates the forming candle)
                     try:
-                        save_candles_batch(app_symbol, [current_candle])
-                        compute_and_cache_flip(app_symbol, current_candle)
+                        save_candles_batch(app_symbol, [candle])
+                        compute_and_cache_flip(app_symbol, candle)
                     except Exception as e:
-                        print("[quotex] %s finalize error: %s" % (app_symbol, e))
-                current_minute = now_minute
-                current_candle = {"time": now_minute, "open": (price if price is not None else 0), "high": (price if price is not None else 0), "low": (price if price is not None else 0), "close": (price if price is not None else 0), "ticks": (1 if price is not None else 0)}
-                try:
-                    save_candles_batch(app_symbol, [current_candle])
-                    compute_and_cache_flip(app_symbol, current_candle)
-                except Exception as e:
-                    print("[quotex] %s new-candle write error: %s" % (app_symbol, e))
-            else:
-                if price is not None:
-                    if price > current_candle["high"]: current_candle["high"] = price
-                    if price < current_candle["low"]:  current_candle["low"]  = price
-                    current_candle["close"] = price
-                    current_candle["ticks"] += 1
-                try:
-                    save_candles_batch(app_symbol, [current_candle])
-                    compute_and_cache_flip(app_symbol, current_candle)
-                except Exception as e:
-                    print("[quotex] %s update write error: %s" % (app_symbol, e))
+                        print("[quotex] %s save err: %s" % (app_symbol, e))
 
-            STATE["last_update_by_market"][app_symbol] = now_ts
+                    if candle_time != last_saved_time:
+                        last_saved_time = candle_time
+                        last_change = _time.time()
+                        print("[quotex] %s NEW candle from QUOTEX: t=%s O=%.5f H=%.5f L=%.5f C=%.5f" % (
+                            app_symbol, candle_time, candle["open"], candle["high"], candle["low"], candle["close"]))
 
-            if now_ts - last_tick_wall > 15:
-                print("[quotex] %s no ticks for 15s, full reset" % app_symbol)
+                    STATE["last_update_by_market"][app_symbol] = _time.time()
+
+            # Heartbeat every 60s
+            if _time.time() - last_heartbeat > 60:
+                age = _time.time() - last_change
+                print("[quotex] %s heartbeat: last Quotex candle update %.1fs ago" % (app_symbol, age))
+                last_heartbeat = _time.time()
+
+            # If no update from Quotex for 90 seconds, re-subscribe
+            if _time.time() - last_change > 90:
+                print("[quotex] %s no Quotex candle update for 90s, re-subscribing" % app_symbol)
                 try:
-                    await client.stop_candles_stream(resolve_quotex_symbol(app_symbol))
-                except Exception as e:
-                    print("[quotex] %s stop error: %s" % (app_symbol, e))
+                    await client.stop_candles_stream(quotex_asset)
+                except Exception:
+                    pass
                 await asyncio.sleep(0.5)
                 try:
-                    await client.start_candles_stream(resolve_quotex_symbol(app_symbol), PERIOD)
-                    print("[quotex] %s re-subscribed OK" % app_symbol)
+                    await client.start_candles_stream(quotex_asset, PERIOD)
                 except Exception as e:
                     print("[quotex] %s re-subscribe failed: %s" % (app_symbol, e))
-                last_tick_wall = now_ts
-                last_tick_ts = 0.0
-
-            if now_ts - last_heartbeat > 60:
-                print("[quotex] %s heartbeat: last tick %.1fs ago, minute %s" % (app_symbol, now_ts - last_tick_wall, current_minute))
-                last_heartbeat = now_ts
+                last_change = _time.time()
 
         except Exception as e:
-            print("[quotex] %s unexpected error: %s" % (app_symbol, e))
+            print("[quotex] %s stream err: %s" % (app_symbol, e))
             await asyncio.sleep(0.5)
 
         await asyncio.sleep(0.3)
-
 
 def get_flip_state(app_symbol):
     return STATE["flips"].get(app_symbol) or {"error": "not computed yet"}
