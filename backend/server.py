@@ -192,13 +192,30 @@ def debug_ep(symbol):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+
+
+def market_feed_type(symbol):
+    """Return 'LIVE' or 'OTC' based on Quotex's current feed for this symbol.
+    - Gold / Silver: always OTC
+    - Forex pairs: LIVE during weekdays 07:00-22:00 UTC, OTC otherwise
+    """
+    if symbol in ("XAUUSD", "XAGUSD"):
+        return "OTC"
+    now = datetime.now(timezone.utc)
+    if now.weekday() >= 5:
+        return "OTC"
+    if 7 <= now.hour < 22:
+        return "LIVE"
+    return "OTC"
+
 @app.route("/api/status")
 def status():
     try:
         counts = {s: candle_count(s) for s in qc.OTC_MARKETS}
     except Exception:
         counts = {}
-    return jsonify({"collector_running": qc.STATE["running"], "collector_connected": qc.STATE["connected"], "session_loaded": qc.STATE["session_loaded"], "collector_error": qc.STATE["error"], "candle_counts": counts, "candles_collected": qc.STATE["candles_collected"], "last_update_by_market": qc.STATE["last_update_by_market"], "symbols": list(qc.OTC_MARKETS.keys())})
+    feed_types = {s: market_feed_type(s) for s in qc.OTC_MARKETS}
+    return jsonify({"collector_running": qc.STATE["running"], "collector_connected": qc.STATE["connected"], "session_loaded": qc.STATE["session_loaded"], "collector_error": qc.STATE["error"], "candle_counts": counts, "candles_collected": qc.STATE["candles_collected"], "last_update_by_market": qc.STATE["last_update_by_market"], "symbols": list(qc.OTC_MARKETS.keys()), "feed_types": feed_types})
 
 
 SESSION_SECS = 7 * 24 * 3600
