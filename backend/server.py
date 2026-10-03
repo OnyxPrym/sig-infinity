@@ -1047,14 +1047,14 @@ def phase_endpoint(symbol):
 
         trend = an._supertrend(df, an.Config.ATR_PERIOD, an.Config.MULTIPLIER)
 
-        # The last 20 values — for display
+        # The last 20 values - for display
         last_20 = [int(x) for x in trend.iloc[-20:]]
 
         # CURRENT vs PREVIOUS candle
         curr = int(trend.iloc[-1])
         prev = int(trend.iloc[-2])
 
-        # No flip — return idle but include the last 20
+        # No flip - return idle but include the last 20
         if curr == prev or curr == 0 or prev == 0:
             return jsonify({
                 "ok": True,
@@ -1075,7 +1075,7 @@ def phase_endpoint(symbol):
         if flip_time:
             age = max(0, time.time() - flip_time)
         else:
-            # Unknown start time — assume just happened
+            # Unknown start time - assume just happened
             age = 0
 
         orange = an.Config.FLASH_ORANGE_SECONDS
