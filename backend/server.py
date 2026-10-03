@@ -158,7 +158,8 @@ def healthz():
 
 
 DB_PATH = str(Path(__file__).parent / "sig_infinity.db")
-turso_db.set_local_fallback_path(DB_PATH)
+turso_db.set_local_fallback_path(DB_PATH)
+
 
 
 
@@ -585,12 +586,29 @@ def debug_analysis(symbol):
     symbol = symbol.upper()
     if symbol not in qc.OTC_MARKETS:
         return jsonify({"ok": False, "message": f"Unknown symbol: {symbol}"}), 400
-    df = load_candles(symbol, limit=300)
-    if df.empty:
-        return jsonify({"ok": False, "message": "No candles in database"}), 503
-    factors = an.compute_all_factors(df)
-    return jsonify({"ok": True, "symbol": symbol, "candles_1m": len(df),
-                    "factors": factors, "generated_at": time.time()})
+    try:
+        df = load_candles(symbol, limit=100)
+        if df.empty or len(df) < 15:
+            return jsonify({"ok": False, "message": "Not enough candles"}), 503
+        df_closed = df.iloc[:-1].reset_index(drop=True)
+        trend = an._supertrend(df_closed, an.Config.ATR_PERIOD, an.Config.MULTIPLIER)
+        last_20 = [int(x) for x in trend.iloc[-20:]]
+        curr = int(trend.iloc[-1])
+        prev = int(trend.iloc[-2])
+        prev2 = int(trend.iloc[-3]) if len(trend) > 2 else prev
+        st_color = "GREEN" if curr == 1 else "RED"
+        prev_st_color = "GREEN" if prev == 1 else "RED"
+        prev2_st_color = "GREEN" if prev2 == 1 else "RED"
+        flip_on_closed = (prev != prev2) and (prev != 0) and (prev2 != 0)
+        fire_dir = None
+        if flip_on_closed:
+            if prev2 == -1 and prev == 1: fire_dir = "BUY"
+            elif prev2 == 1 and prev == -1: fire_dir = "SELL"
+        latch = qc.get_flip_state(symbol)
+        return jsonify({"ok": True, "symbol": symbol, "config": {"ATR_PERIOD": an.Config.ATR_PERIOD, "MULTIPLIER": an.Config.MULTIPLIER}, "candles_1m": len(df_closed), "last_20_supertrend_line": last_20, "current_supertrend": st_color, "prev_supertrend": prev_st_color, "prev2_supertrend": prev2_st_color, "would_fire_signal_now": flip_on_closed, "would_fire_direction": fire_dir, "collector_latch": {"direction": latch.get("direction"), "flip_time_epoch": latch.get("flip_time_epoch"), "live_flip": latch.get("live_flip")}} )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/control/start", methods=["POST"])
