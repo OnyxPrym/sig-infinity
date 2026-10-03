@@ -104,94 +104,76 @@ def swing_levels(df, lb=60, w=3):
 
 def analyze_symbol(df_1m, symbol, cooldown_tracker=None, current_time=None):
     """
-    Evaluate the market for a potential signal.
-    Internal logic is proprietary and must not be exposed to the frontend.
+    STRICT SUPERTREND FLIP STRATEGY:
+    - Only fires when SuperTrend changes color on the last CLOSED candle
+    - Red -> Green = BUY
+    - Green -> Red = SELL
+    - Nothing else fires a signal
+
+    Uses Wilder's RMA ATR (matches TradingView / Quotex SuperTrend exactly).
     """
     if len(df_1m) < Config.MIN_1M_CANDLES:
         return _wait(symbol, "Warming up - insufficient history.")
 
-    # Ensure timestamp column exists and is datetime
     if "timestamp" not in df_1m.columns:
         return _wait(symbol, "Data format error.")
 
-    df = df_1m.copy()  # MEMORY_TRIM_V1
-    if len(df) > 200: df = df.iloc[-200:].reset_index(drop=True)
+    df = df_1m.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-    # Compute internal trend state
+    # Compute SuperTrend on 1-minute candles
     try:
         trend = _supertrend(df, Config.ATR_PERIOD, Config.MULTIPLIER)
     except Exception:
-        logger.exception("signal computation failed for %s", symbol)
+        logger.exception("supertrend compute failed for %s", symbol)
         return _wait(symbol, "Internal error.")
 
     if len(trend) < 3:
         return _wait(symbol, "Not enough data.")
 
-    # Detect color flip on last CLOSED candle
-    curr = trend.iloc[-1]
-    prev = trend.iloc[-2]
-    prev2 = trend.iloc[-3] if len(trend) > 3 else prev
+    # We look at the LAST CLOSED candle and the one before it.
+    # trend[-1] = current forming candle's trend
+    # trend[-2] = last closed candle's trend
+    curr_state = int(trend.iloc[-1])
+    prev_state = int(trend.iloc[-2])
+    prev2_state = int(trend.iloc[-3])
 
-    # Latest closed candle time and its age
-    last_candle_time = df["timestamp"].iloc[-1]
-    now = current_time if current_time is not None else pd.Timestamp.now(tz=last_candle_time.tz)
+    # STRICT RULE: only fire on an actual flip on the last closed candle
+    # Meaning: trend[-2] != trend[-3] (flip happened on the closed candle)
+    # AND trend[-1] == trend[-2] (currently in that new color, no second flip)
+    flip_happened_on_closed = (prev_state != prev2_state) and (prev_state != 0) and (prev2_state != 0)
+    still_same_color = (curr_state == prev_state)
 
-    # Normalize tz so subtraction works
+    if not flip_happened_on_closed or not still_same_color:
+        return _wait(symbol, "No SuperTrend flip.")
+
+    # Direction: current color determines direction
+    # GREEN (1) = BUY
+    # RED (-1) = SELL
+    if prev_state == 1:
+        flip_direction = "BUY"
+    elif prev_state == -1:
+        flip_direction = "SELL"
+    else:
+        return _wait(symbol, "Invalid trend state.")
+
+    # Cooldown to prevent re-firing same flip multiple times
+    now = current_time if current_time is not None else pd.Timestamp.utcnow()
+    if cooldown_tracker is not None:
+        suppressed, _ = cooldown_tracker.is_suppressed(symbol, flip_direction, now)
+        if suppressed:
+            return _wait(symbol, "Signal already fired for this flip.")
+        cooldown_tracker.record(symbol, flip_direction, now)
+
+    last_candle_time = df["timestamp"].iloc[-2]  # last closed candle time
     if last_candle_time.tz is not None and now.tz is None:
         now = now.tz_localize(last_candle_time.tz)
     elif last_candle_time.tz is None and now.tz is not None:
         now = now.tz_localize(None)
 
-    # How many seconds into the CURRENT candle are we?
-    # If last candle timestamp is the OPEN time, age = now - open_time
-    # We treat the last row as the currently-forming candle.
-    seconds_into_candle = (now - last_candle_time).total_seconds()
-    if seconds_into_candle < 0:
-        seconds_into_candle = 0
-    if seconds_into_candle > 120:
-        # Data is stale or timestamp is off by more than a minute
-        return _wait(symbol, "Data stream lagging.")
-
-    # ---- Real-time cross detection on the FORMING candle ----
-    # curr = forming candle's current trend state (updated per tick)
-    # prev = last closed candle's trend state
-    curr_state = int(trend.iloc[-1])
-    prev_state = int(trend.iloc[-2])
-
-    if curr_state == prev_state or curr_state == 0:
-        return _wait(symbol, "No setup forming.")
-
-    flip_direction = "BUY" if curr_state == 1 else "SELL"
-
-    # When did this cross start?
-    # The forming candle opened at last_candle_time.
-    # seconds_into_candle = time since that open.
-    seconds_since_flip_start = seconds_into_candle
-
-    delay = Config.SIGNAL_DELAY_SECONDS       # 15
-    window = Config.ENTRY_WINDOW_SECONDS      # 25
-    total_live = delay + window               # 40 seconds
-
-    if seconds_since_flip_start < delay:
-        remaining = int(delay - seconds_since_flip_start)
-        return _wait(symbol, f"Signal incoming... {remaining}s",
-                     trigger_timeframe="LOADING", forming_direction=flip_direction)
-
-    if seconds_since_flip_start > total_live:
-        return _wait(symbol, "Signal window closed.")
-
-    entry_window_opens_at = now - pd.Timedelta(seconds=(seconds_since_flip_start - delay))
-    entry_window_closes_at = entry_window_opens_at + pd.Timedelta(seconds=window)
-    entry_time = entry_window_opens_at
-    expiry_time = entry_time + pd.Timedelta(minutes=Config.EXPIRY_MINUTES)
-
-    # Cooldown check
-    if cooldown_tracker is not None:
-        suppressed, remaining = cooldown_tracker.is_suppressed(symbol, flip_direction, now)
-        if suppressed:
-            return _wait(symbol, "Cooldown active.")
-        cooldown_tracker.record(symbol, flip_direction, now)
+    entry_window_opens_at = now
+    entry_window_closes_at = now + pd.Timedelta(seconds=Config.ENTRY_WINDOW_SECONDS)
+    expiry_time = entry_window_closes_at + pd.Timedelta(minutes=Config.EXPIRY_MINUTES)
 
     last_close = float(df["close"].iloc[-1])
     sup, res = swing_levels(df, 60)
@@ -203,20 +185,19 @@ def analyze_symbol(df_1m, symbol, cooldown_tracker=None, current_time=None):
         "trigger_timeframe": "SETUP",
         "score": 10,
         "total": 10,
-        "reason": f"Setup confirmed for {symbol}.",
-        "factors": {"confirmed": True},
+        "reason": f"SuperTrend flipped {'GREEN' if prev_state == 1 else 'RED'} on {symbol}.",
+        "factors": {"supertrend_flip": True, "curr": curr_state, "prev": prev_state, "prev2": prev2_state},
         "support": float(sup) if sup is not None else None,
         "resistance": float(res) if res is not None else None,
         "price": last_close,
         "entry_price": last_close,
-        "entry_time": entry_time.isoformat(),
+        "entry_time": entry_window_opens_at.isoformat(),
         "expiry_time": expiry_time.isoformat(),
         "entry_window_seconds": Config.ENTRY_WINDOW_SECONDS,
         "entry_window_opens_at": entry_window_opens_at.isoformat(),
         "entry_window_closes_at": entry_window_closes_at.isoformat(),
         "generated_at": now.isoformat(),
     }
-
 
 def _wait(symbol, reason, trigger_timeframe=None, forming_direction=None):
     out = {"symbol": symbol, "bias": "WAIT", "score": 0, "total": 10,
