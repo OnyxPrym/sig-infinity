@@ -1,0 +1,22 @@
+[db] Local SQLite: C:\Users\User\sig-infinity-deploy\backend\sig_infinity.db
+[init_db] Turso tables ensured
+[db] Local SQLite: C:\Users\User\sig-infinity-deploy\backend\sig_infinity.db
+============================================================
+SIG INFINITY AI - Master Server
+============================================================
+Starting Quotex collector...
+[quotex] Session loaded from session.json (ssid=ymZCBj6uyib3fsBZ...)
+[quotex] Session loaded. Connecting...
+[WS DEBUG] Received while not authenticated: 0{"sid":"Mc3_TJtjjpZur2pqDSOA","upgrades":[],"pingInterval":25000,"pingTimeout":5000}
+[WS DEBUG] Received while not authenticated: 40
+[WS DEBUG] Received while not authenticated: 451-["instruments/list",{"_placeholder":true,"num":0}]
+[WS DEBUG] Received while not authenticated: [[368,"ATOUSD_otc","Cosmos (OTC)","cryptocurrency",4,87,60,30,3,1,0,0,[[300,"call"],[600,"call"],[900,"put"],[1800,"put"],[2700,"put"],[3600,"put"],[7200,"put"],[10800,"put"],[14400,"put"]],179107200
+[WS DEBUG] Received while not authenticated: 42["s_authorization"]
+[DEBUG] Websocket authorization SUCCESS!
+[quotex] CONNECTED
+[quotex] Demo balance: 10343.14
+[quotex] Fetching historical candles (sequential, 3s apart)...
+Starting Flask API on port 10000
+============================================================
+ * Serving Flask app 'server'
+ * Debug mode: off

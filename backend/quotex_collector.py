@@ -1,5 +1,5 @@
 """
-quotex_collector.py ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â WebSocket streaming edition.
+quotex_collector.py â€” WebSocket streaming edition.
 
 Replaces the 3-second polling loop (get_candles, ~2-3 min behind) with the
 real-time WebSocket stream (start_realtime_candle, sub-second updates).
@@ -13,55 +13,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from pyquotex.stable_api import Quotex
 import analysis as _an
-import turso_db
 import pandas as pd
 
-# ============================================================
-#  OTC / LIVE symbol resolver (auto-switching)
-#  - Gold is OTC 24/7
-#  - Others use LIVE on weekdays and _otc on weekends
-# ============================================================
-ALWAYS_OTC = {"XAUUSD"}
-APP_SYMBOLS = ["XAUUSD", "EURUSD", "USDJPY", "XAGUSD", "GBPUSD", "AUDCHF"]
-
-
-def _market_is_closed_utc():
-    now = datetime.now(timezone.utc)
-    wd, hr = now.weekday(), now.hour
-    if wd == 4 and hr >= 21:
-        return True
-    if wd == 5:
-        return True
-    if wd == 6 and hr < 21:
-        return True
-    return False
-
-
-def resolve_quotex_symbol(app_symbol):
-    if app_symbol in ALWAYS_OTC:
-        return app_symbol + "_otc"
-    if _market_is_closed_utc():
-        return app_symbol + "_otc"
-    return app_symbol
-
-
-def is_otc_now(app_symbol):
-    return resolve_quotex_symbol(app_symbol).endswith("_otc")
-
-
-OTC_MARKETS = {s: resolve_quotex_symbol(s) for s in APP_SYMBOLS}
-HISTORICAL_CANDLES = 100
+OTC_MARKETS = {
+    "XAUUSD": "XAUUSD",
+    "EURUSD": "EURUSD",
+    "USDJPY": "USDJPY",
+    "XAGUSD": "XAGUSD",
+    "GBPUSD": "GBPUSD",
+    "AUDCHF": "AUDCHF",
+}
+HISTORICAL_CANDLES = 250
 PERIOD = 60
 STREAM_TICK_SLEEP = 0.3  # FASTTICK_V5  # FASTTICK_V5 - 300ms loop  # FASTTICK_V4
 FETCH_WORKERS = 1
 SESSION_FILE = Path(__file__).parent / "session.json"
 DB_PATH = str(Path(__file__).parent / "sig_infinity.db")
-turso_db.set_local_fallback_path(DB_PATH)
 
-# _FLIP_LOCK_V1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â prevents double-fire of the same flip when two coroutines race
+# _FLIP_LOCK_V1 â€” prevents double-fire of the same flip when two coroutines race
 _FLIP_LOCK = threading.Lock()
 
-# OPTIMIZATION: per-symbol SuperTrend cache ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â avoids recomputing on every tick
+# OPTIMIZATION: per-symbol SuperTrend cache â€” avoids recomputing on every tick
 _TREND_CACHE = {}
 
 STATE = {
@@ -74,48 +46,7 @@ STATE = {
     "flips": {},
 }
 
-def phase_from_flip(symbol):
-    """Return the current phase based on seconds since the flip."""
-    st = STATE["flips"].get(symbol) or {}
-    if not st.get("direction"):
-        return {"phase": "idle", "direction": None, "seconds_since_flip": None,
-                "seconds_until_ready": None, "seconds_until_close": None}
-
-    flip_time = st.get("flip_time_epoch")
-    if not flip_time:
-        return {"phase": "idle", "direction": None, "seconds_since_flip": None,
-                "seconds_until_ready": None, "seconds_until_close": None}
-
-    age = time.time() - flip_time
-    if age < 0:
-        age = 0
-
-    orange = 10
-    green = 25
-    close_at = 55
-
-    if age < orange:
-        return {"phase": "orange_flash", "direction": st["direction"],
-                "seconds_since_flip": int(age),
-                "seconds_until_ready": int(green - age),
-                "seconds_until_close": int(close_at - age)}
-    elif age < green:
-        return {"phase": "green_flash", "direction": st["direction"],
-                "seconds_since_flip": int(age),
-                "seconds_until_ready": 0,
-                "seconds_until_close": int(close_at - age)}
-    elif age < close_at:
-        return {"phase": "open", "direction": st["direction"],
-                "seconds_since_flip": int(age),
-                "seconds_until_ready": 0,
-                "seconds_until_close": int(close_at - age)}
-    else:
-        return {"phase": "idle", "direction": None, "seconds_since_flip": int(age),
-                "seconds_until_ready": None, "seconds_until_close": None}
-
-
-
-# Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ AUTO_REFRESH_V1: reconnect signal from auto_refresh.py Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+# ─── AUTO_REFRESH_V1: reconnect signal from auto_refresh.py ───
 _RECONNECT_EVENT = threading.Event()
 
 
@@ -123,14 +54,17 @@ def force_reconnect():
     """Called by auto_refresh.py after writing a fresh session.json.
     Signals the current _run_all() to exit cleanly so the outer retry loop
     reloads session.json and reconnects with the new SSID."""
-    print("[collector] force_reconnect() called Ã¢â‚¬â€ signalling loop to exit")
+    print("[collector] force_reconnect() called — signalling loop to exit")
     STATE["refresh_pending"] = True
     _RECONNECT_EVENT.set()
 
 
 def _reconnect_requested() -> bool:
-    return _RECONNECT_EVENT.is_set()
-# Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    if _RECONNECT_EVENT.is_set():
+        _RECONNECT_EVENT.clear()
+        return True
+    return False
+# ───────────────────────────────────────────────────────────────
 
 
 def _normalize_candle(c):
@@ -150,14 +84,14 @@ def _normalize_candle(c):
     }
 
 
-# ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ OPTIMIZATION: persistent DB connection ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+# â”€â”€â”€â”€â”€â”€â”€ OPTIMIZATION: persistent DB connection â”€â”€â”€â”€â”€â”€â”€
 _DB_CONN = None
 _DB_LOCK = threading.Lock()
 
 def _get_db():
     global _DB_CONN
     if _DB_CONN is None:
-        _DB_CONN = turso_db.connect()
+        _DB_CONN = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
         # WAL mode: concurrent reads/writes, much faster commits
         _DB_CONN.execute("PRAGMA journal_mode=WAL")
         _DB_CONN.execute("PRAGMA synchronous=NORMAL")
@@ -180,33 +114,12 @@ def save_candles_batch(symbol, candles):
                 )
                 inserted += 1
             except Exception as e:
-                err_msg = str(e)
-                if "stream not found" in err_msg or "404" in err_msg:
-                    print("[quotex] Turso stream broken, reconnecting...")
-                    _reset_db()
-                    conn = _get_db()
-                    try:
-                        conn.execute(
-                            "INSERT OR REPLACE INTO candles (source, symbol, timestamp, open, high, low, close, volume) VALUES ('quotex', ?, ?, ?, ?, ?, ?, ?)",
-                            (symbol, ts, c["open"], c["high"], c["low"], c["close"], c["ticks"]),
-                        )
-                        inserted += 1
-                    except Exception as e2:
-                        print("[quotex] save retry failed %s: %s" % (symbol, e2))
-                else:
-                    print("[quotex] save error %s: %s" % (symbol, err_msg))
-        try:
-            conn.commit()
-            turso_db.sync(conn)
-        except Exception as e:
-            err = str(e)
-            if "stream not found" in err or "404" in err:
-                _reset_db()
-            print("[quotex] commit failed: %s" % err)
+                print("[quotex] save error %s: %s" % (symbol, e))
+        conn.commit()
         return inserted
 
 
-# ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ FASTER_REACTION_V1 ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+# â”€â”€â”€ FASTER_REACTION_V1 â”€â”€â”€
 # Per-symbol trend cache: the full trend/band arrays are computed once, then
 # only the LAST bar is recomputed on every tick. The full array is refreshed
 # only when a new candle starts (minute rollover).
@@ -298,7 +211,7 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
 
             # Did the candle roll over to a new minute?
             if ts_dt != ts_list[-1]:
-                # New candle ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â append a new bar and recompute it
+                # New candle â€” append a new bar and recompute it
                 close.append(price)
                 high.append(high_p)
                 low.append(low_p)
@@ -310,7 +223,7 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
                 trend.append(trend[-1])
                 cached["n"] = len(close)
             else:
-                # Same candle ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â update the last bar
+                # Same candle â€” update the last bar
                 close[-1] = price
                 high[-1] = high_p
                 low[-1] = low_p
@@ -367,7 +280,7 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
         try:
             df = _pd.read_sql_query(
                 "SELECT timestamp, open, high, low, close FROM candles WHERE source='quotex' AND symbol=? ORDER BY timestamp ASC",
-                turso_db.connect(), params=(app_symbol,),
+                sqlite3.connect(DB_PATH), params=(app_symbol,),
             )
         except Exception as e:
             STATE["flips"][app_symbol] = {"error": str(e)}
@@ -426,7 +339,7 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
     live_flip = (trend_curr != trend_prev) and trend_curr != 0
     live_direction = None
     if live_flip:
-        live_direction = "SELL" if trend_curr == 1 else "BUY"
+        live_direction = "BUY" if trend_curr == 1 else "SELL"
 
     with _FLIP_LOCK:
         # WHIPSAW GUARD: if a latch is active and the trend re-flips in the
@@ -469,40 +382,21 @@ def compute_and_cache_flip(app_symbol, latest_candle=None):
 
 
 def load_session():
-    """Load Quotex session. Turso first, then fall back to local file."""
-    # 1. Try Turso (survives container restarts)
-    try:
-        import turso_db
-        conn = turso_db.connect()
-        cur = conn.execute("SELECT ssid, user_agent FROM bot_session WHERE id = 1")
-        row = cur.fetchone()
-        conn.close()
-        if row and row[0] and row[1]:
-            print("[quotex] Session loaded from TURSO (ssid=%s...)" % row[0][:16])
-            return row[0], row[1]
-    except Exception as e:
-        print("[quotex] Turso session load failed (fallback to file): %s" % e)
-
-    # 2. Fall back to local session.json
-    if SESSION_FILE.exists():
-        try:
-            with open(SESSION_FILE, "r") as f:
-                data = json.load(f)
-            token = data.get("token")
-            user_agent = data.get("user_agent")
-            if token and user_agent:
-                print("[quotex] Session loaded from session.json (ssid=%s...)" % token[:16])
-                return token, user_agent
-        except Exception as e:
-            print("[quotex] session.json read failed: %s" % e)
-
-    raise RuntimeError("No session available (Turso empty + session.json missing)")
+    if not SESSION_FILE.exists():
+        raise RuntimeError("Session file not found: %s" % SESSION_FILE)
+    with open(SESSION_FILE, "r") as f:
+        data = json.load(f)
+    token = data.get("token")
+    user_agent = data.get("user_agent")
+    if not token or not user_agent:
+        raise RuntimeError("session.json must contain token and user_agent")
+    return token, user_agent
 
 
 async def _fetch_history(client, app_symbol, quotex_asset):
     try:
         candles = await client.get_historical_candles(
-            resolve_quotex_symbol(app_symbol), HISTORICAL_CANDLES * 60, PERIOD,
+            quotex_asset, HISTORICAL_CANDLES * 60, PERIOD,
             timeout=45, max_workers=FETCH_WORKERS,
         )
         if candles:
@@ -516,103 +410,95 @@ async def _fetch_history(client, app_symbol, quotex_asset):
 
 
 async def _stream_loop(client, app_symbol, quotex_asset):
-    """
-    Reads Quotex's OWN aggregated candles from candle_generated_check
-    instead of building candles from raw ticks.
-
-    This makes the bot's SuperTrend match Quotex exactly.
-    """
+    """FASTTICK_V4 â€” real-time tick aggregator with keep-alive writes."""
     import time as _time
 
-    # Subscribe to Quotex's candle stream
     sub_ok = False
     for attempt in range(1, 6):
         try:
             await client.start_candles_stream(quotex_asset, PERIOD)
             sub_ok = True
-            print("[quotex] %s subscribed to QUOTEX candles (attempt %d)" % (app_symbol, attempt))
+            print("[quotex] %s subscribed (attempt %d)" % (app_symbol, attempt))
             break
         except Exception as e:
-            print("[quotex] %s subscribe %d failed: %s" % (app_symbol, attempt, e))
+            print("[quotex] %s subscribe attempt %d failed: %s" % (app_symbol, attempt, e))
             await asyncio.sleep(2)
-
     if not sub_ok:
-        print("[quotex] %s FAILED to subscribe after 5 attempts" % app_symbol)
-        return
+        print("[quotex] %s could not subscribe after 5 attempts; retrying in 10s" % app_symbol)
 
-    last_saved_time = 0
+    current_minute = None
+    current_candle = None
+    last_tick_ts = 0.0
+    last_tick_wall = _time.time()
     last_heartbeat = _time.time()
-    last_change = _time.time()
 
-    while STATE["running"]:
+    while STATE["running"] and not _reconnect_requested():
         try:
-            # Read Quotex's own candle from their event stream
-            qx_candle = None
-            if client.api:
-                qx_candle = client.api.candle_generated_check.get(quotex_asset, {}).get(PERIOD)
+            tick = client.api.realtime_candles.get(quotex_asset) if client.api else None
+            now_ts = _time.time()
+            now_minute = int(now_ts // 60) * 60
 
-            if qx_candle and isinstance(qx_candle, dict):
-                # Quotex sends: {"asset":..., "time":..., "open":..., "close":..., "high":..., "low":..., "period":..., "ticks":...}
-                candle_time = int(qx_candle.get("time") or qx_candle.get("timestamp") or 0)
-                if candle_time > 10_000_000_000:
-                    candle_time = candle_time // 1000
+            price = None
+            if tick and isinstance(tick, list) and len(tick) >= 3:
+                tick_ts = float(tick[1])
+                if tick_ts != last_tick_ts:
+                    last_tick_ts = tick_ts
+                    last_tick_wall = now_ts
+                price = float(tick[2])
 
-                # Only save when Quotex provides a valid OHLC
-                o = qx_candle.get("open")
-                h = qx_candle.get("high")
-                l = qx_candle.get("low")
-                c = qx_candle.get("close")
-
-                if o is not None and h is not None and l is not None and c is not None and candle_time > 0:
-                    candle = {
-                        "time": candle_time,
-                        "open": float(o),
-                        "high": float(h),
-                        "low": float(l),
-                        "close": float(c),
-                        "ticks": int(qx_candle.get("ticks", 0)),
-                    }
-
-                    # Save on every tick (updates the forming candle)
+            if now_minute != current_minute:
+                if current_candle is not None:
                     try:
-                        save_candles_batch(app_symbol, [candle])
-                        compute_and_cache_flip(app_symbol, candle)
+                        save_candles_batch(app_symbol, [current_candle])
+                        compute_and_cache_flip(app_symbol, current_candle)
                     except Exception as e:
-                        print("[quotex] %s save err: %s" % (app_symbol, e))
+                        print("[quotex] %s finalize error: %s" % (app_symbol, e))
+                current_minute = now_minute
+                current_candle = {"time": now_minute, "open": (price if price is not None else 0), "high": (price if price is not None else 0), "low": (price if price is not None else 0), "close": (price if price is not None else 0), "ticks": (1 if price is not None else 0)}
+                try:
+                    save_candles_batch(app_symbol, [current_candle])
+                    compute_and_cache_flip(app_symbol, current_candle)
+                except Exception as e:
+                    print("[quotex] %s new-candle write error: %s" % (app_symbol, e))
+            else:
+                if price is not None:
+                    if price > current_candle["high"]: current_candle["high"] = price
+                    if price < current_candle["low"]:  current_candle["low"]  = price
+                    current_candle["close"] = price
+                    current_candle["ticks"] += 1
+                try:
+                    save_candles_batch(app_symbol, [current_candle])
+                    compute_and_cache_flip(app_symbol, current_candle)
+                except Exception as e:
+                    print("[quotex] %s update write error: %s" % (app_symbol, e))
 
-                    if candle_time != last_saved_time:
-                        last_saved_time = candle_time
-                        last_change = _time.time()
-                        print("[quotex] %s NEW candle from QUOTEX: t=%s O=%.5f H=%.5f L=%.5f C=%.5f" % (
-                            app_symbol, candle_time, candle["open"], candle["high"], candle["low"], candle["close"]))
+            STATE["last_update_by_market"][app_symbol] = now_ts
 
-                    STATE["last_update_by_market"][app_symbol] = _time.time()
-
-            # Heartbeat every 60s
-            if _time.time() - last_heartbeat > 60:
-                age = _time.time() - last_change
-                print("[quotex] %s heartbeat: last Quotex candle update %.1fs ago" % (app_symbol, age))
-                last_heartbeat = _time.time()
-
-            # If no update from Quotex for 90 seconds, re-subscribe
-            if _time.time() - last_change > 90:
-                print("[quotex] %s no Quotex candle update for 90s, re-subscribing" % app_symbol)
+            if now_ts - last_tick_wall > 15:
+                print("[quotex] %s no ticks for 15s, full reset" % app_symbol)
                 try:
                     await client.stop_candles_stream(quotex_asset)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print("[quotex] %s stop error: %s" % (app_symbol, e))
                 await asyncio.sleep(0.5)
                 try:
                     await client.start_candles_stream(quotex_asset, PERIOD)
+                    print("[quotex] %s re-subscribed OK" % app_symbol)
                 except Exception as e:
                     print("[quotex] %s re-subscribe failed: %s" % (app_symbol, e))
-                last_change = _time.time()
+                last_tick_wall = now_ts
+                last_tick_ts = 0.0
+
+            if now_ts - last_heartbeat > 60:
+                print("[quotex] %s heartbeat: last tick %.1fs ago, minute %s" % (app_symbol, now_ts - last_tick_wall, current_minute))
+                last_heartbeat = now_ts
 
         except Exception as e:
-            print("[quotex] %s stream err: %s" % (app_symbol, e))
+            print("[quotex] %s unexpected error: %s" % (app_symbol, e))
             await asyncio.sleep(0.5)
 
         await asyncio.sleep(0.3)
+
 
 def get_flip_state(app_symbol):
     return STATE["flips"].get(app_symbol) or {"error": "not computed yet"}
@@ -651,8 +537,8 @@ async def _run_all():
     print("[quotex] Starting WebSocket stream (real-time)...")
     await asyncio.gather(*[_stream_loop(client, s, a) for s, a in OTC_MARKETS.items()])
 
-    # AUTO_REFRESH_V1: gather returned Ã¢â‚¬â€ either stop_collector() or force_reconnect()
-    print("[quotex] Stream loop exited Ã¢â‚¬â€ closing client")
+    # AUTO_REFRESH_V1: gather returned — either stop_collector() or force_reconnect()
+    print("[quotex] Stream loop exited — closing client")
     try:
         await client.close()
     except Exception as e:
@@ -661,13 +547,7 @@ async def _run_all():
 
 def collector_thread_main():
     STATE["running"] = True
-    while STATE["running"]:
-        # Check for reconnect signal at the top of each iteration
-        if _RECONNECT_EVENT.is_set():
-            print("[quotex] Reconnect signal received - restarting with fresh session")
-            _RECONNECT_EVENT.clear()
-            STATE["refresh_pending"] = False
-
+    while STATE["running"] and not _reconnect_requested():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -704,7 +584,7 @@ def stop_collector():
 
 
 def init_db():
-    conn = turso_db.connect()
+    conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS candles (
             source TEXT NOT NULL,
@@ -715,7 +595,4 @@ def init_db():
         )
     """)
     conn.commit()
-    turso_db.sync(conn)
     conn.close()
-
-
