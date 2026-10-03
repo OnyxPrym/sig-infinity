@@ -945,15 +945,27 @@ def start_result_tracker():
 # ---------------------------------------------------------------------------
 @app.route("/api/forming/<symbol>", methods=["GET"])
 def forming(symbol):
-    # APPROACHING_V1_SERVER
-    # 4 phases: idle | approaching | flash | open
     symbol = symbol.upper()
     if symbol not in qc.OTC_MARKETS:
         return jsonify({"ok": False, "forming": False, "message": f"Unknown symbol: {symbol}"}), 400
 
-    st = qc.get_flip_state(symbol)
-    if not st or st.get("error"):
-        return jsonify({"ok": True, "forming": False, "phase": "idle"})
+    try:
+        phase_info = qc.phase_from_flip(symbol)
+    except Exception as e:
+        return jsonify({"ok": True, "forming": False, "phase": "idle", "error": str(e)})
+
+    phase = phase_info.get("phase", "idle")
+    forming = phase in ("orange_flash", "green_flash", "open")
+
+    return jsonify({
+        "ok": True,
+        "forming": forming,
+        "phase": phase,
+        "direction": phase_info.get("direction"),
+        "seconds_since_flip": phase_info.get("seconds_since_flip"),
+        "seconds_until_ready": phase_info.get("seconds_until_ready"),
+        "seconds_until_close": phase_info.get("seconds_until_close"),
+    })
 
     now_epoch = time.time()
     flash = an.Config.SIGNAL_DELAY_SECONDS

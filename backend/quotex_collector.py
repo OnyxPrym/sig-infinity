@@ -74,6 +74,47 @@ STATE = {
     "flips": {},
 }
 
+def phase_from_flip(symbol):
+    """Return the current phase based on seconds since the flip."""
+    st = STATE["flips"].get(symbol) or {}
+    if not st.get("direction"):
+        return {"phase": "idle", "direction": None, "seconds_since_flip": None,
+                "seconds_until_ready": None, "seconds_until_close": None}
+
+    flip_time = st.get("flip_time_epoch")
+    if not flip_time:
+        return {"phase": "idle", "direction": None, "seconds_since_flip": None,
+                "seconds_until_ready": None, "seconds_until_close": None}
+
+    age = time.time() - flip_time
+    if age < 0:
+        age = 0
+
+    orange = 10
+    green = 25
+    close_at = 55
+
+    if age < orange:
+        return {"phase": "orange_flash", "direction": st["direction"],
+                "seconds_since_flip": int(age),
+                "seconds_until_ready": int(green - age),
+                "seconds_until_close": int(close_at - age)}
+    elif age < green:
+        return {"phase": "green_flash", "direction": st["direction"],
+                "seconds_since_flip": int(age),
+                "seconds_until_ready": 0,
+                "seconds_until_close": int(close_at - age)}
+    elif age < close_at:
+        return {"phase": "open", "direction": st["direction"],
+                "seconds_since_flip": int(age),
+                "seconds_until_ready": 0,
+                "seconds_until_close": int(close_at - age)}
+    else:
+        return {"phase": "idle", "direction": None, "seconds_since_flip": int(age),
+                "seconds_until_ready": None, "seconds_until_close": None}
+
+
+
 # Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ AUTO_REFRESH_V1: reconnect signal from auto_refresh.py Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 _RECONNECT_EVENT = threading.Event()
 

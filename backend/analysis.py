@@ -1,10 +1,11 @@
 """
 Sig Infinity AI - Analysis Engine
 
-STRICT SUPERTREND LINE COLOR FLIP STRATEGY:
-    RED -> GREEN = BUY
-    GREEN -> RED = SELL
-    No flip = WAIT
+STRICT SUPERTREND LINE FLIP STRATEGY with flash phases:
+  T+0-10s  Orange flash (confirming)
+  T+10-25s Green flash (ready)
+  T+25s+   Entry window open (30s)
+  T+55s    Entry window closes
 """
 import logging
 import numpy as np
@@ -15,8 +16,10 @@ logger = logging.getLogger("sig_infinity.analysis")
 
 class Config:
     MIN_1M_CANDLES = 60
+    FLASH_ORANGE_SECONDS = 10
+    FLASH_GREEN_SECONDS = 15
+    SIGNAL_READY_SECONDS = 25
     ENTRY_WINDOW_SECONDS = 30
-    SIGNAL_DELAY_SECONDS = 10
     EXPIRY_MINUTES = 5
     RESULT_DELAY_SECONDS = 15
     ATR_PERIOD = 8
@@ -25,8 +28,7 @@ class Config:
 
 def _true_range(df):
     h, l, c = df["high"], df["low"], df["close"]
-    tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
-    return tr
+    return pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
 
 
 def _atr(df, period):
@@ -104,26 +106,34 @@ def compute_all_factors(df_1m):
 
 
 def analyze_symbol(df_1m, symbol, cooldown_tracker=None, current_time=None):
+    """
+    Fire only on SuperTrend LINE color flip.
+
+    RED->GREEN = BUY
+    GREEN->RED = SELL
+    """
     if len(df_1m) < Config.MIN_1M_CANDLES:
         return _wait(symbol, "Warming up.")
-    if "timestamp" not in df_1m.columns:
-        return _wait(symbol, "Data format error.")
+
     df = df_1m.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df_closed = df.iloc[:-1].reset_index(drop=True)
+
     if len(df_closed) < 20:
         return _wait(symbol, "Not enough closed candles.")
+
     try:
         trend = _supertrend(df_closed, Config.ATR_PERIOD, Config.MULTIPLIER)
     except Exception:
         logger.exception("supertrend failed for %s", symbol)
         return _wait(symbol, "Internal error.")
-    if len(trend) < 3:
-        return _wait(symbol, "Not enough data.")
+
     prev = int(trend.iloc[-1])
     prev2 = int(trend.iloc[-2])
+
     if prev == prev2 or prev == 0 or prev2 == 0:
         return _wait(symbol, "No SuperTrend color flip.")
+
     if prev2 == -1 and prev == 1:
         flip_direction = "BUY"
         flip_reason = "SuperTrend flipped RED to GREEN"
@@ -132,20 +142,23 @@ def analyze_symbol(df_1m, symbol, cooldown_tracker=None, current_time=None):
         flip_reason = "SuperTrend flipped GREEN to RED"
     else:
         return _wait(symbol, "Invalid SuperTrend state.")
+
     now = current_time if current_time is not None else pd.Timestamp.utcnow()
+
     if cooldown_tracker is not None:
         suppressed, _ = cooldown_tracker.is_suppressed(symbol, flip_direction, now)
         if suppressed:
             return _wait(symbol, "Signal already fired for this flip.")
         cooldown_tracker.record(symbol, flip_direction, now)
-    flash = Config.SIGNAL_DELAY_SECONDS
-    window = Config.ENTRY_WINDOW_SECONDS
+
     now_epoch = now.timestamp() if hasattr(now, "timestamp") else float(now)
-    entry_opens_epoch = now_epoch + flash
-    entry_closes_epoch = entry_opens_epoch + window
+    entry_opens_epoch = now_epoch
+    entry_closes_epoch = entry_opens_epoch + Config.ENTRY_WINDOW_SECONDS
     expiry_epoch = entry_closes_epoch + Config.EXPIRY_MINUTES * 60
+
     last_close = float(df["close"].iloc[-1])
     sup, res = swing_levels(df, 60)
+
     return {
         "symbol": symbol,
         "bias": flip_direction,
@@ -161,11 +174,10 @@ def analyze_symbol(df_1m, symbol, cooldown_tracker=None, current_time=None):
         "entry_price": last_close,
         "entry_time": pd.Timestamp.fromtimestamp(entry_opens_epoch, tz="UTC").isoformat(),
         "expiry_time": pd.Timestamp.fromtimestamp(expiry_epoch, tz="UTC").isoformat(),
-        "entry_window_seconds": window,
+        "entry_window_seconds": Config.ENTRY_WINDOW_SECONDS,
         "entry_window_opens_at": pd.Timestamp.fromtimestamp(entry_opens_epoch, tz="UTC").isoformat(),
         "entry_window_closes_at": pd.Timestamp.fromtimestamp(entry_closes_epoch, tz="UTC").isoformat(),
         "generated_at": now_epoch,
-        "flash_seconds": flash,
     }
 
 
