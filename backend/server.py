@@ -1032,32 +1032,51 @@ def forming(symbol):
 # --- PHASE_ENDPOINT_V1 ---
 @app.route("/api/phase/<symbol>", methods=["GET"])
 def phase_endpoint(symbol):
-    """Compute phase directly from fresh Turso data. Reliable alternative to /api/forming."""
+    """
+    Reads the last 20 SuperTrend line values.
+    Fires the moment the CURRENT candle's color differs from the PREVIOUS candle.
+    """
     symbol = symbol.upper()
     if symbol not in qc.OTC_MARKETS:
         return jsonify({"ok": False, "message": "Unknown symbol"}), 400
 
     try:
-        df = load_candles(symbol, limit=100)
-        if df.empty or len(df) < 20:
+        df = load_candles(symbol, limit=50)
+        if df.empty or len(df) < 22:
             return jsonify({"ok": True, "forming": False, "phase": "idle"})
 
-        df_closed = df.iloc[:-1].reset_index(drop=True)
-        trend = an._supertrend(df_closed, an.Config.ATR_PERIOD, an.Config.MULTIPLIER)
+        trend = an._supertrend(df, an.Config.ATR_PERIOD, an.Config.MULTIPLIER)
 
+        # The last 20 values — for display
+        last_20 = [int(x) for x in trend.iloc[-20:]]
+
+        # CURRENT vs PREVIOUS candle
         curr = int(trend.iloc[-1])
         prev = int(trend.iloc[-2])
-        prev2 = int(trend.iloc[-3]) if len(trend) > 2 else prev
 
-        if prev == prev2 or prev == 0 or prev2 == 0:
-            return jsonify({"ok": True, "forming": False, "phase": "idle",
-                            "curr": curr, "prev": prev, "prev2": prev2})
+        # No flip — return idle but include the last 20
+        if curr == prev or curr == 0 or prev == 0:
+            return jsonify({
+                "ok": True,
+                "forming": False,
+                "phase": "idle",
+                "curr": curr,
+                "prev": prev,
+                "last_20": last_20,
+                "current_color": "GREEN" if curr == 1 else "RED",
+            })
 
-        direction = "BUY" if (prev2 == -1 and prev == 1) else "SELL"
+        # FLIP! Color changed between the last two candles
+        direction = "BUY" if curr == 1 else "SELL"
 
+        # Use collector flip time if it happens to have it
         st = qc.get_flip_state(symbol)
-        flip_time = st.get("flip_time_epoch") or (time.time() - 30)
-        age = max(0, time.time() - flip_time)
+        flip_time = st.get("flip_time_epoch")
+        if flip_time:
+            age = max(0, time.time() - flip_time)
+        else:
+            # Unknown start time — assume just happened
+            age = 0
 
         orange = an.Config.FLASH_ORANGE_SECONDS
         green = an.Config.SIGNAL_READY_SECONDS
@@ -1070,7 +1089,7 @@ def phase_endpoint(symbol):
         elif age < close_at:
             phase = "open"
         else:
-            return jsonify({"ok": True, "forming": False, "phase": "idle", "expired": True})
+            phase = "open"  # keep firing while flip is on the chart
 
         return jsonify({
             "ok": True,
@@ -1082,7 +1101,8 @@ def phase_endpoint(symbol):
             "seconds_until_close": max(0, int(close_at - age)),
             "curr": curr,
             "prev": prev,
-            "prev2": prev2,
+            "last_20": last_20,
+            "current_color": "GREEN" if curr == 1 else "RED",
         })
     except Exception as e:
         print(f"[phase] error {symbol}: {e}")
