@@ -497,7 +497,7 @@ async def _stream_loop(client, app_symbol, quotex_asset):
     last_tick_wall = _time.time()
     last_heartbeat = _time.time()
 
-    while STATE["running"]:
+    while STATE["running"] and not _RECONNECT_EVENT.is_set():
         try:
             tick = client.api.realtime_candles.get(resolve_quotex_symbol(app_symbol)) if client.api else None
             now_ts = _time.time()
